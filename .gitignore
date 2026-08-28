@@ -1,0 +1,154 @@
+# =============================================================================
+# GITIGNORE - PI2 UNIVESP IMÓVEIS
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# 1. ARQUIVOS SENSÍVEIS, CHAVES & CREDENCIAIS
+# -----------------------------------------------------------------------------
+# Variáveis de Ambiente
+.env
+.env.*
+*.env
+!.env.example
+!.env.template
+
+# ASP.NET Core AppSettings (Contém ConnectionStrings e Chaves de API)
+appsettings.json
+appsettings.*.json
+!appsettings.Example.json
+!appsettings.template.json
+**/appsettings.json
+**/appsettings.*.json
+!**/appsettings.Example.json
+!**/appsettings.template.json
+
+# User Secrets & Launch Settings locais
+secrets.json
+**/secrets.json
+UserSecrets/
+[Ll]aunch[Ss]ettings.json
+
+# Neon CLI & Cloud config
+.neon
+.neon/
+
+# Certificados, chaves privadas e tokens
+*.pem
+*.key
+*.pfx
+*.p12
+*.cer
+*.crt
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+
+# -----------------------------------------------------------------------------
+# 2. BANCO DE DADOS (Dumps, Snapshots, Backups e Caches)
+# -----------------------------------------------------------------------------
+*.mdf
+*.ldf
+*.ndf
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.db3
+*.sqlite
+*.sqlite3
+*.sql.dump
+*.dump
+*.backup
+*.bak
+*.dmp
+
+# -----------------------------------------------------------------------------
+# 3. BACKEND (.NET / C# / ASP.NET Core)
+# -----------------------------------------------------------------------------
+# Pastas de compilação
+[Bb]in/
+[Oo]bj/
+**/[Bb]in/
+**/[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+**/[Dd]ebug/
+**/[Rr]elease/
+x64/
+x86/
+[Tt]est[Rr]esults/
+**/[Tt]est[Rr]esults/
+[Bb]uild[Ll]og.*
+
+# Arquivos de usuário e cache do Visual Studio / Rider
+*.user
+*.userosscache
+*.sln.docstates
+*.suo
+*.userprefs
+*.DotSettings.user
+.vs/
+**/.vs/
+.idea/
+**/.idea/
+
+# -----------------------------------------------------------------------------
+# 4. FRONTEND (Next.js / Node / React / TypeScript)
+# -----------------------------------------------------------------------------
+node_modules/
+**/node_modules/
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# Next.js build e outputs
+.next/
+**/.next/
+out/
+**/out/
+build/
+**/build/
+dist/
+**/dist/
+.turbo/
+**/.turbo/
+
+# Logs de depuração de gerenciadores de pacotes
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Cobertura de Testes
+coverage/
+**/coverage/
+
+# Vercel
+.vercel/
+
+# TypeScript build info
+*.tsbuildinfo
+
+# -----------------------------------------------------------------------------
+# 5. SISTEMA OPERACIONAL & EDITORES DIVERSOS
+# -----------------------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# VS Code (ignora configs de usuário, mantendo templates se compartilhados)
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
