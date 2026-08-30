@@ -77,23 +77,40 @@ endef
 # Alvos
 # =============================================================================
 
-.PHONY: help install compile run run-backend run-frontend stop seed test clean env
+.PHONY: help env install compile build run run-backend run-frontend check-env seed test clean stop doctor
 
 help:
 	@echo ""
 	@echo "AppImóveis — comandos disponíveis:"
+	@echo "=================================="
+	@echo "DIAGNÓSTICO E CONFIGURAÇÃO"
 	@echo "----------------------------------"
+	@echo "  make help           Mostra esta lista de comandos"
+	@echo "  make doctor         Diagnostica o ambiente (dotnet, node, npm, .env)"
 	@echo "  make env            Verifica se o .env está configurado"
-	@echo "  make install        Baixa dependencias (dotnet restore + npm install)"
-	@echo "  make compile        Compila backend + frontend (sem rodar)"
-	@echo "  make build          Alias de compile"
-	@echo "  make run            Sobe backend (:5209) + frontend (:3000)"
-	@echo "  make run-backend    Sobe somente o backend"
-	@echo "  make run-frontend   Sobe somente o frontend"
-	@echo "  make seed           Busca imoveis reais da GeckoAPI e grava no banco"
-	@echo "  make stop           Para os processos em segundo plano"
-	@echo "  make test           Roda os testes do backend"
-	@echo "  make clean          Apaga builds (.NET + frontend)"
+	@echo ""
+	@echo "DEPENDÊNCIAS E BUILD"
+	@echo "----------------------------------"
+	@echo "  make install        Baixa dependências (dotnet restore + npm install)"
+	@echo "  make compile        Compila backend + typecheck do frontend"
+	@echo "  make build          Alias de 'compile'"
+	@echo ""
+	@echo "EXECUÇÃO (SOBE OS SERVIDORES)"
+	@echo "----------------------------------"
+	@echo "  make run            Sobe backend (:5209) + frontend (:3000) em background"
+	@echo "  make run-backend    Sobe somente o backend  (log: .backend.log)"
+	@echo "  make run-frontend   Sobe somente o frontend (log: .frontend.log)"
+	@echo "  make seed           Busca imóveis reais da GeckoAPI e grava no banco"
+	@echo "  make test           Roda os testes do backend (dotnet test)"
+	@echo ""
+	@echo "LIMPEZA E ENCERRAMENTO"
+	@echo "----------------------------------"
+	@echo "  make stop           Para backend e frontend que estão em background"
+	@echo "  make clean          Apaga builds (.NET bin/obj + frontend .next)"
+	@echo ""
+	@echo "INTERNOS (usados como dependências de outros alvos)"
+	@echo "----------------------------------"
+	@echo "  make check-env      Confere DATABASE_URL/GECKO_API_KEY (chamado por run/seed)"
 	@echo ""
 
 env:
@@ -183,7 +200,7 @@ doctor:
 	@printf "dotnet (via make PATH): "; (dotnet --version 2>/dev/null || echo "FALTA — rode: curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/d.sh && chmod +x /tmp/d.sh && /tmp/d.sh --channel 10.0")
 	@printf "node: "; (node --version 2>/dev/null || echo "FALTA")
 	@printf "npm: "; (npm --version 2>/dev/null || echo "FALTA")
-	@printf "aspnet-runtime: "; (ls -d /usr/share/dotnet/shared/Microsoft.AspNetCore.App 2>/dev/null && echo "ok (ou usar ~/.dotnet)" || echo "ATENCAO")
-	@printf "SDK oficial ~/.dotnet: "; (ls -d $(DOTNET_HOME)/sdk 2>/dev/null && echo "ok" || echo "FALTA — use o instalador da Microsoft")
+	@printf "aspnet-runtime (~/.dotnet): "; (test -d $(DOTNET_HOME)/shared/Microsoft.AspNetCore.App && echo "ok" || echo "FALTA no ~/.dotnet")
+	@printf "SDK oficial ~/.dotnet: "; (test -d $(DOTNET_HOME)/sdk && echo "ok" || echo "FALTA — rode: curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/d.sh && chmod +x /tmp/d.sh && /tmp/d.sh --channel 10.0")
 	@echo ""
 	$(call check_env)
