@@ -36,7 +36,7 @@ import {
   CheckCircle
 } from "lucide-react";
 
-export type MapTileProvider = "google-streets" | "google-satellite" | "carto-voyager" | "carto-dark";
+export type MapTileProvider = "osm-streets" | "esri-satellite" | "osm-dark";
 export type BusinessType = "Sale" | "Rent";
 
 export interface PropertyData {
@@ -795,7 +795,7 @@ export function CartographicMapExplorer({ onSelectForDashboard }: CartographicMa
 
   const [selectedNeighborhood, setSelectedNeighborhood] = useState<NeighborhoodData>(NEIGHBORHOODS[0]);
   const [selectedPropertyId, setSelectedPropertyId] = useState<string>("jma-1");
-  const [tileProvider, setTileProvider] = useState<MapTileProvider>("google-streets");
+  const [tileProvider, setTileProvider] = useState<MapTileProvider>("osm-streets");
   const [businessType, setBusinessType] = useState<BusinessType>("Sale");
   const [propertyTypeFilter, setPropertyTypeFilter] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState("");
@@ -804,6 +804,7 @@ export function CartographicMapExplorer({ onSelectForDashboard }: CartographicMa
   const [searchFeedback, setSearchFeedback] = useState<string | null>(null);
   const [activePhotoIdx, setActivePhotoIdx] = useState<number>(0);
   const [isCardExpanded, setIsCardExpanded] = useState<boolean>(true);
+  const [mapReady, setMapReady] = useState(false);
   const [dbProperties, setDbProperties] = useState<PropertyData[]>([]);
   const [failedImages, setFailedImages] = useState<Set<string>>(new Set());
 
@@ -965,6 +966,7 @@ export function CartographicMapExplorer({ onSelectForDashboard }: CartographicMa
         mapInstanceRef.current = map;
         markersGroupRef.current = L.layerGroup().addTo(map);
         polygonsGroupRef.current = L.layerGroup().addTo(map);
+        setMapReady(true);
       }
     }
 
@@ -981,23 +983,23 @@ export function CartographicMapExplorer({ onSelectForDashboard }: CartographicMa
 
   // Update Tile Layer
   useEffect(() => {
-    if (!mapInstanceRef.current) return;
+    if (!mapInstanceRef.current || !mapReady) return;
     const map = mapInstanceRef.current;
 
-    let tileUrl = "https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}";
+    let tileUrl = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
     let tileOptions: any = {
-      maxZoom: 20,
-      subdomains: ["mt0", "mt1", "mt2", "mt3"],
+      maxZoom: 19,
+      subdomains: "abc",
     };
 
-    if (tileProvider === "google-satellite") {
-      tileUrl = "https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}"; // Hybrid Satellite + Streets
-    } else if (tileProvider === "carto-voyager") {
-      tileUrl = "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png";
-      tileOptions = { maxZoom: 20, subdomains: "abcd" };
-    } else if (tileProvider === "carto-dark") {
-      tileUrl = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png";
-      tileOptions = { maxZoom: 20, subdomains: "abcd" };
+    if (tileProvider === "esri-satellite") {
+      // Esri World Imagery — free satellite tiles, no API key required
+      tileUrl = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";
+      tileOptions = { maxZoom: 20 };
+    } else if (tileProvider === "osm-dark") {
+      // OpenStreetMap tiles with a dark CSS filter (no API key required)
+      tileUrl = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
+      tileOptions = { maxZoom: 19, subdomains: "abc" };
     }
 
     import("leaflet").then((L) => {
@@ -1009,8 +1011,15 @@ export function CartographicMapExplorer({ onSelectForDashboard }: CartographicMa
 
       const tileLayer = L.tileLayer(tileUrl, tileOptions);
       tileLayer.addTo(map);
+
+      // Fallback: if tiles fail to load, automatically switch to OpenStreetMap.
+      tileLayer.on("tileerror", () => {
+        if (tileProvider !== "osm-streets") {
+          setTileProvider("osm-streets");
+        }
+      });
     });
-  }, [tileProvider]);
+  }, [tileProvider, mapReady]);
 
   // Update Neighborhood Polygons and Markers
   useEffect(() => {
@@ -1220,6 +1229,9 @@ export function CartographicMapExplorer({ onSelectForDashboard }: CartographicMa
             width: "100%",
             height: "100%",
             zIndex: 1,
+            filter: tileProvider === "osm-dark"
+              ? "invert(1) hue-rotate(180deg) brightness(0.85)"
+              : "none",
           }}
         />
 
@@ -1363,7 +1375,7 @@ export function CartographicMapExplorer({ onSelectForDashboard }: CartographicMa
             >
               <button
                 type="button"
-                onClick={() => setTileProvider("google-streets")}
+                onClick={() => setTileProvider("osm-streets")}
                 style={{
                   padding: "5px 10px",
                   fontSize: 12,
@@ -1371,15 +1383,15 @@ export function CartographicMapExplorer({ onSelectForDashboard }: CartographicMa
                   border: "none",
                   borderRadius: "16px",
                   cursor: "pointer",
-                  backgroundColor: tileProvider === "google-streets" ? "#dc8c46" : "transparent",
-                  color: tileProvider === "google-streets" ? "#ffffff" : "#333333",
+                  backgroundColor: tileProvider === "osm-streets" ? "#dc8c46" : "transparent",
+                  color: tileProvider === "osm-streets" ? "#ffffff" : "#333333",
                 }}
               >
                 🗺️ Ruas
               </button>
               <button
                 type="button"
-                onClick={() => setTileProvider("google-satellite")}
+                onClick={() => setTileProvider("esri-satellite")}
                 style={{
                   padding: "5px 10px",
                   fontSize: 12,
@@ -1387,15 +1399,15 @@ export function CartographicMapExplorer({ onSelectForDashboard }: CartographicMa
                   border: "none",
                   borderRadius: "16px",
                   cursor: "pointer",
-                  backgroundColor: tileProvider === "google-satellite" ? "#dc8c46" : "transparent",
-                  color: tileProvider === "google-satellite" ? "#ffffff" : "#333333",
+                  backgroundColor: tileProvider === "esri-satellite" ? "#dc8c46" : "transparent",
+                  color: tileProvider === "esri-satellite" ? "#ffffff" : "#333333",
                 }}
               >
                 🛰️ Satélite
               </button>
               <button
                 type="button"
-                onClick={() => setTileProvider("carto-dark")}
+                onClick={() => setTileProvider("osm-dark")}
                 style={{
                   padding: "5px 10px",
                   fontSize: 12,
@@ -1403,8 +1415,8 @@ export function CartographicMapExplorer({ onSelectForDashboard }: CartographicMa
                   border: "none",
                   borderRadius: "16px",
                   cursor: "pointer",
-                  backgroundColor: tileProvider === "carto-dark" ? "#dc8c46" : "transparent",
-                  color: tileProvider === "carto-dark" ? "#ffffff" : "#333333",
+                  backgroundColor: tileProvider === "osm-dark" ? "#dc8c46" : "transparent",
+                  color: tileProvider === "osm-dark" ? "#ffffff" : "#333333",
                 }}
               >
                 🌙 Noite

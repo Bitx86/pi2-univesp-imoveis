@@ -152,3 +152,9 @@ desktop.ini
 !.vscode/tasks.json
 !.vscode/launch.json
 !.vscode/extensions.json
+
+# -----------------------------------------------------------------------------
+# 6. LOGS DE RUNTIME GERADOS PELO MAKEFILE (make run)
+# -----------------------------------------------------------------------------
+/.backend.log
+/.frontend.log
