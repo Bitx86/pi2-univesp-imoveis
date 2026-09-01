@@ -1,455 +1,231 @@
 # AppImóveis — Frontend Design System & Architecture Reference
+## Design System: Azure Geomatics
 
-> **Single-page application** for real-estate price analytics in Guarulhos (SP).  
-> **Subject**: A cartographic atlas that decodes hidden property-value geography through statistical rigor and GIS layers.  
-> **Audience**: Investors, brokers, and homebuyers who need data-grade confidence before negotiating.  
-> **Job**: Transform opaque listings into a navigable, statistically grounded map where every price is contextualized by neighborhood median, σ-dispersion, and urban-infrastructure layers.
-
----
-
-## 1. Design Philosophy & Signature
-
-**Core metaphor**: *A field cartographer's journal* — deep moss greens, bone-white ink, amber compass accents. The interface feels like an analog survey instrument digitized: tactile surfaces, monospaced data labels, editorial serif headlines.
-
-**Signature element**: **The Embedded Product-UI Panel** (`.product-ui-panel`) — a light-surface "sheet" dropped into the dark atlas that renders live statistical visualizations (Gaussian curves, GIS layer toggles, SQL terminal) as if they were plates in a field notebook. This is the one memorable artifact; everything else supports it.
-
-**Aesthetic risk**: Dark organic canvas (`#314218`) instead of the default light/cream or near-black. The palette is derived from forest floor / lichen / moss — specific to the Brazilian Atlantic Forest biome surrounding Guarulhos. No generic "dark mode" defaults.
+> **Plataforma Modular de Inteligência Imobiliária e Cartografia Geoespacial (SPA)**  
+> **Tema / Visual Identity**: *Azure Geomatics* — Azul tecnológico profundo, precisão cartográfica, tipografia editorial híbrida e superfícies planas estruturadas.  
+> **Público-Alvo**: Investidores, analistas imobiliários, corretores e compradores que demandam rigor estatístico e clareza espacial sem ruído cognitivo.  
+> **Missão**: Transformar listagens imobiliárias dispersas em uma plataforma modular de inteligência analítica com exploração espacial em tela cheia, visualizações estatísticas de alta resolução e simulação preditiva.
 
 ---
 
-## 2. Token System (CSS Custom Properties)
+## 1. Filosofia de Design & Identidade Visual
 
-Defined in `src/app/globals.css:1-51`. All components consume these tokens; no hardcoded hex values in component code.
+### 1.1 Metáfora Central
+**Atlas Geodésico Digital de Precisão**: Uma fusão entre a autoridade cartográfica de um atlas físico de alta precisão e a sofisticação de uma estação de trabalho SIG (Sistemas de Informação Geográfica). Tons de azul abissal (`#07122a`, `#14213d`) transmitem estabilidade, autoridade técnica e excelente contraste cromático para renderização de mapas vetoriais e noturnos. Acentos em azul elétrico (`#0066ff`) e esmeralda analítica (`#22c55e`) guiam a atenção do usuário com precisão cirúrgica.
 
-### 2.1 Color Palette (6 semantic roles + accents)
+### 1.2 Elemento Assinatura (*Signature Element*)
+**O HUD Cartográfico & Viewport Imersivo**: O mapa espacial e as ferramentas analíticas não são meros blocos empilhados numa rolagem sem fim; são viewports dedicados em uma arquitetura de aplicação com barra lateral hierárquica fixa (`Sidebar`). Controles flutuantes em vidro escuro e contornos técnicos (`outline-variant`) garantem máxima área útil de visualização.
 
-| Token | Hex | Role | Usage |
-|-------|-----|------|-------|
-| `--color-moss-canvas` | `#314218` | **Page background** | `html`, `body`, hero section wrapper |
-| `--color-forest-floor` | `#212f0c` | **Elevated dark surface** | Cards, modals, dropdowns, nav backdrop |
-| `--color-deep-bog` | `#18210c` | **Deepest surface** | Table headers, code blocks, terminal panes |
-| `--color-fern` | `#3d521e` | **Interactive surface** | Primary card background (`.surface-fern`) |
-| `--color-lichen` | `#64754b` | **Border / divider** | All card borders, input borders, HRs |
-| `--color-limestone` | `#d8dcd2` | **Muted text / placeholder** | Captions, table headers, mono labels |
-| `--color-parchment` | `#eeeeee` | **Body copy** | Primary reading text |
-| `--color-bone-white` | `#ffffff` | **High-contrast headlines** | Serif display, button text, metrics |
-| `--color-charcoal` | `#333333` | **Light-panel text** | Inside `.product-ui-panel` only |
-| `--color-ink` | `#000000` | **Map base layer** | Leaflet container background |
-| `--color-amber-compass` | `#dc8c46` | **Primary accent / CTA** | Buttons, highlights, active states, data emphasis |
-| `--color-amber-hover` | `#e89953` | **Hover accent** | Button hover, link hover |
-| `--color-amber-dim` | `rgba(220,140,70,0.18)` | **Subtle glow** | Badge backgrounds, focus rings |
+### 1.3 Decisão Estética e Quebra de Padrões
+- **Superfícies Planas com Bordas Técnicas (`ROUND_FOUR` + Flat Elevation)**: Abandono de sombras difusas pesadas ou cantos excessivamente arredondados em favor de um raio controlado de 4px (`ROUND_FOUR`) e contornos sutis de 1px (`#44474f` / `#1c2d4e`).
+- **Transição de Long-Scroll para SPA Modular**: Substituição da rolagem vertical infinita por navegação por telas dedicadas com preservação de estado e transições fluidas de opacidade/transformação.
+- **Eliminação de Débito Visual**: Supressão de blocos brutos de código SQL da visualização primária. A complexidade do backend (PostgreSQL/Neon) atua "sob o capô", refletindo-se diretamente em métricas claras e interfaces de visualização limpas.
 
-> **Rule**: Never add new colors. Extend semantics via opacity or existing tokens.
+---
 
-### 2.2 Typography
+## 2. Sistema de Tokens (Design Tokens)
 
-| Role | Font Stack | Weight | Scale / Usage |
-|------|------------|--------|---------------|
-| **Display Serif** | `Fraunces`, `Georgia`, `serif` | 300 (light) | Hero title (80px/0.88), Section headings (48px/0.96) |
-| **Body Sans** | `Plus Jakarta Sans`, `-apple-system`, `BlinkMacSystemFont`, `Segoe UI`, `sans-serif` | 400/500/600 | All UI text, buttons, tables, forms |
-| **Mono / Data** | `JetBrains Mono`, `monospace` | 400/500/600 | Metrics, code, CEP, UUIDs, prices, σ labels |
+### 2.1 Paleta de Cores (Azure Geomatics)
 
-**Type Scale (responsive clamp via `@media` in components):**
+| Token CSS | Hex | Papel Semântico | Aplicação no Sistema |
+|---|---|---|---|
+| `--color-surface` | `#07122a` | **Superfície Principal** | Fundo da aplicação, fundo base de telas |
+| `--color-surface-dim` | `#07122a` | **Superfície Atenuada** | Fundo de transição e áreas de baixa ênfase |
+| `--color-surface-bright` | `#2f3952` | **Superfície Realçada** | Destaques de superfície, bordas de foco |
+| `--color-surface-container-lowest` | `#030d25` | **Superfície Abissal** | Fundo da sidebar fixa, inputs recolhidos, code blocks |
+| `--color-surface-container-low` | `#101b33` | **Container Nível 1** | Headers de tabelas, cartões secundários |
+| `--color-surface-container` | `#14213d` | **Container Nível 2 (Padrão)** | Painéis, cards principais, drawers flutuantes |
+| `--color-surface-container-high` | `#1c2d4e` | **Container Nível 3** | Modais, tooltips, cards em foco/hover |
+| `--color-surface-container-highest` | `#263a5d` | **Container Nível 4** | Chips ativos, barras de status, tags selecionadas |
+| `--color-on-surface` | `#e2e2e6` | **Texto Primário** | Títulos, valores de métricas, texto de leitura principal |
+| `--color-on-surface-variant` | `#c4c6d0` | **Texto Secundário** | Subtítulos, rótulos de eixos, descrições secundárias |
+| `--color-outline` | `#8e9099` | **Contorno Neutro** | Bordas ativas, divisores destacados |
+| `--color-outline-variant` | `#44474f` | **Contorno Sutil** | Bordas padrão de cards (1px solid), grades de tabelas |
+| `--color-primary` | `#0066ff` | **Ação Primária / Destaque** | Botões primários, marcadores ativos, links de ação |
+| `--color-on-primary` | `#ffffff` | **Texto sobre Primário** | Texto em botões primários e marcadores ativos |
+| `--color-primary-container` | `#0044bb` | **Container Primário** | Badges de destaque, estado ativo de navegação |
+| `--color-on-primary-container` | `#d8e2ff` | **Texto sobre Container Prim.**| Rótulos destacados em badges primários |
+| `--color-secondary` | `#565e71` | **Ação Secundária** | Botões secundários, ícones neutros |
+| `--color-on-secondary` | `#ffffff` | **Texto sobre Secundário** | Texto em botões secundários |
+| `--color-secondary-container` | `#dae2f9` | **Container Secundário** | Badges de suporte |
+| `--color-on-secondary-container` | `#131c2c` | **Texto sobre Container Sec.** | Texto sobre badges de suporte |
+| `--color-error` | `#ffb4ab` | **Alerta / Outlier Negativo** | Identificação de dispersão extrema e erros |
+| `--color-on-error` | `#690005` | **Texto sobre Erro** | Texto e ícones de erro |
+| `--color-success` | `#22c55e` | **Sucesso / Oportunidade** | Indicador de bom negócio, métricas positivas |
+| `--color-on-success` | `#ffffff` | **Texto sobre Sucesso** | Texto sobre indicadores de sucesso |
 
+---
+
+### 2.2 Tipografia Híbrida
+
+A combinação tipográfica alia a herança acadêmica da **Source Serif 4** para títulos editoriais e a legibilidade da **Inter** para dados quantitativos e controles operacionais. A fonte monospaçada **JetBrains Mono** é mantida para coordenadas, CEPs, valores monetários e notações estatísticas ($\sigma$).
+
+| Papel Tipográfico | Família Tipográfica | Peso | Altura de Linha | Transformação / Estilo | Uso Principal |
+|---|---|---|---|---|---|
+| **Display** | `Source Serif 4`, serif | 700 (Bold) | 1.2 | Nenhuma | Títulos de grande impacto, cabeçalhos de módulo |
+| **Headline** | `Source Serif 4`, serif | 600 (Semi-bold) | 1.3 | Nenhuma | Títulos de seções, modais e cards analíticos |
+| **Body** | `Inter`, sans-serif | 400 (Regular) / 500 | 1.5 | Nenhuma | Textos de leitura, descrições, parágrafos |
+| **Label** | `Inter`, sans-serif | 500 (Medium) | 1.2 | `uppercase`, letter-spacing 0.06em | Rótulos de campo, abas, botões, headers de tabela |
+| **Mono / Data** | `JetBrains Mono`, monospace | 400 / 500 | 1.4 | Nenhuma | Valores em R$, desvios $\sigma$, coordenadas geográficas |
+
+#### Escala Tipográfica (CSS Classes):
 ```css
-/* Hero Title */
-font-size: clamp(44px, 6vw, 80px);
-line-height: 0.88;
-letter-spacing: -3.44px;
-
-/* Section Heading (serif-heading-lg) */
-font-size: clamp(32px, 4vw, 48px);
-line-height: 0.96;
-letter-spacing: -1.65px;
-
-/* Subheading (sans-subheading) */
-font-size: 18px; line-height: 1.4;
-
-/* Body (sans-body) */
-font-size: 16px; line-height: 1.5; letter-spacing: 0.033em;
-
-/* Caption / Label (sans-caption) */
-font-size: 12px; line-height: 1.43;
-
-/* Micro-label (mono, uppercase) */
-font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
-```
-
-### 2.3 Spacing Scale (8px base)
-
-```css
---spacing-4: 4px;   --spacing-8: 8px;   --spacing-12: 12px;
---spacing-16: 16px; --spacing-20: 20px; --spacing-24: 24px;
---spacing-32: 32px; --spacing-36: 36px; --spacing-48: 48px;
---spacing-64: 64px; --spacing-72: 72px; --spacing-80: 80px;
---spacing-120: 120px;
-```
-
-**Layout constants:**
-- `--page-max-width: 1200px` — content column
-- `--section-gap: 80px` — vertical rhythm between major sections
-
-### 2.4 Border Radii
-
-| Token | Value | Use |
-|-------|-------|-----|
-| `--radius-cards` | `6px` | Cards, panels, modals, inputs |
-| `--radius-badges` | `6px` | Badges, chips, pills |
-| `--radius-images` | `6px` | Image containers |
-| `--radius-inputs` | `6px` | Form inputs, selects |
-| `--radius-buttons` | `20px` | CTA buttons (pill shape) |
-
-### 2.5 Shadows
-
-| Token | Value |
-|-------|-------|
-| `--shadow-sm` | `rgba(0,0,0,0.2) 0 2px 5px` |
-| `--shadow-panel` | `rgba(0,0,0,0.35) 0 10px 30px, rgba(0,0,0,0.2) 0 2px 5px` |
-
----
-
-## 3. Component Inventory & Composition Map
-
-```
-page.tsx (root layout)
-├── TopographicBackground          // Ambient SVG curves (z-index 0)
-├── TickerBar                      // Live announcement marquee (sticky top)
-├── NavBar                         // Sticky editorial nav (z-index 50)
-├── main (z-index 10)
-│   ├── HeroSection                // Above-fold thesis + metrics stamp
-│   ├── CartographicMapExplorer    // SIGNATURE: Google Maps + price pins + photo carousel
-│   ├── ClientProofRow             // Partner logos / trust badges
-│   ├── FeatureSections            // Three editorial spreads (Stats, GIS, Neon)
-│   ├── NeighborhoodMatrix         // Sortable, filterable comparison table
-│   ├── ValuationEstimator         // Interactive price simulator
-│   ├── FeltCTASection             // Final conversion panel
-│   └── CartographerFooter         // Field-journal footer
-└── DashboardModal                 // Neon SQL viewer (portal, z-index 100)
-```
-
-### 3.1 Component Responsibilities
-
-| Component | File | Primary Job | Key Interactions |
-|-----------|------|-------------|------------------|
-| **HeroSection** | `HeroSection.tsx` | Thesis statement + dual CTA + 4-key-metric stamp | Scroll to map, open dashboard |
-| **CartographicMapExplorer** | `CartographicMapExplorer.tsx` | **Core product UI** — Leaflet map, price-pill markers, property photo carousel, neighborhood filter chips, geocoding search | Click pin → expand card; filter by type; switch tile layers; search address/CEP |
-| **NeighborhoodMatrix** | `NeighborhoodMatrix.tsx` | Comparative data table with sortable columns | Sort by any metric; toggle Sale/Rent; filter by name; "Ver no Mapa" scroll |
-| **FeatureSections** | `FeatureSections.tsx` | Editorial spreads explaining *how it works* | Tab through GIS layers; confidence slider (Gaussian) |
-| **ValuationEstimator** | `ValuationEstimator.tsx` | Price simulator (m² × area ± σ) | Input area, bedrooms, neighborhood → output range |
-| **DashboardModal** | `DashboardModal.tsx` | Live Neon SQL viewer + seed trigger | Switch bairro/tipo; refresh; seed DB; copy API URL |
-| **NavBar** | `NavBar.tsx` | Sticky navigation + mobile drawer | Smooth-scroll to sections; open dashboard |
-| **TickerBar** | `TickerBar.tsx` | Live announcement marquee | Pause on hover |
-| **TopographicBackground** | `TopographicBackground.tsx` | Ambient SVG topographic curves | Purely decorative, parallax-ready |
-| **ClientProofRow** | `ClientProofRow.tsx` | Social proof logos | None |
-| **FeltCTASection** | `FeltCTASection.tsx` | Final conversion panel | Scroll to map, open dashboard |
-| **CartographerFooter** | `CartographerFooter.tsx` | Field-journal footer with links | Open dashboard |
-
----
-
-## 4. Layout & Visual Grammar
-
-### 4.1 Page Architecture (Single-Page Scroll)
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│ TickerBar (fixed, full-width)                               │
-├─────────────────────────────────────────────────────────────┤
-│ NavBar (sticky, backdrop blur)                              │
-├─────────────────────────────────────────────────────────────┤
-│ HeroSection (80px pt, 64px pb, centered, max 1200px)        │
-├─────────────────────────────────────────────────────────────┤
-│ CartographicMapExplorer (780px tall viewport, 1280px max)   │
-├─────────────────────────────────────────────────────────────┤
-│ ClientProofRow (horizontal scroll logo strip)               │
-├─────────────────────────────────────────────────────────────┤
-│ FeatureSections (3 × editorial spreads, 80px gap each)      │
-│   ├── Statistical Dispersion (Gaussian curve + cards)       │
-│   ├── GIS Layers (tabbed layer visual + metrics)            │
-│   └── Neon Architecture (SQL terminal + metrics bar)        │
-├─────────────────────────────────────────────────────────────┤
-│ NeighborhoodMatrix (fern-surface table, sortable)           │
-├─────────────────────────────────────────────────────────────┤
-│ ValuationEstimator (interactive calculator card)            │
-├─────────────────────────────────────────────────────────────┤
-│ FeltCTASection (amber CTA panel)                            │
-├─────────────────────────────────────────────────────────────┤
-│ CartographerFooter (deep-bog, mono links)                   │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### 4.2 Surface Hierarchy (Dark → Light)
-
-| Layer | Background | Border | Purpose |
-|-------|------------|--------|---------|
-| **Canvas** | `moss-canvas` | — | Page base |
-| **Elevated Dark** | `forest-floor` | `lichen` | Cards, modals, nav backdrop |
-| **Deepest** | `deep-bog` | `lichen` | Table headers, code blocks |
-| **Interactive** | `fern` | `lichen` | Primary data cards (`.surface-fern`) |
-| **Product UI Panel** | `bone-white` | `rgba(lichen,0.3)` | **Light sheet** — embedded analytics, Gaussian viz, SQL |
-| **Map Viewport** | `#e5e3df` (Leaflet default) | — | Google Maps / Satellite base |
-
-> **Rule**: The light `.product-ui-panel` appears **only** inside FeatureSections and Hero metrics stamp. It signals "live product data" vs. editorial content.
-
-### 4.3 Interactive States (Consistent Across Components)
-
-| Element | Default | Hover | Active / Focus | Disabled |
-|---------|---------|-------|----------------|----------|
-| **Primary CTA (`.btn-amber`)** | `amber-compass` bg, white text | `amber-hover`, `translateY(-1px)`, shadow | `translateY(0)` | `opacity: 0.5`, cursor not-allowed |
-| **Ghost Link (`.btn-ghost-link`)** | Transparent, white bottom-border | `amber-compass` text & border | — | — |
-| **Secondary (`.btn-fern`)** | `fern` bg, `lichen` border | `lichen` bg | — | — |
-| **Table Row** | Transparent | `rgba(moss-canvas, 0.6)` bg | — | — |
-| **Neighborhood Chip** | White/94%, dark text | Scale 1.02, border `amber` | `moss-canvas` bg, white text | — |
-| **Price Pill (map)** | White bubble, charcoal text | Scale 1.1, z-index 9999 | `amber` bg, white text, scale 1.08 | — |
-| **Input / Select** | `forest-floor` bg, `lichen` border | Border `amber` | Border `amber`, ring `amber-dim` | `opacity: 0.5` |
-
----
-
-## 5. Motion & Animation
-
-**Principle**: Orchestrated, purposeful, respectful of `prefers-reduced-motion`.
-
-| Animation | Trigger | Duration / Easing | Purpose |
-|-----------|---------|-------------------|---------|
-| **Ticker marquee** | Auto (35s linear infinite) | `35s linear` | Live data pulse; pauses on hover |
-| **Pin pulse** | Map load / selection | `2.5s infinite` (scale + box-shadow) | Draw eye to active property |
-| **Card expand/collapse** | Property click | `0.25s cubic-bezier(0.16, 1, 0.3, 1)` | Smooth panel transition |
-| **Map flyTo** | Neighborhood chip / search | `0.8–1.4s` (Leaflet `flyTo`) | Spatial orientation |
-| **Button micro-interactions** | Hover/active | `0.2s ease` / `0.1s` | Tactile feedback |
-| **Modal backdrop** | Open/close | `0.2s` fade + `blur(8px)` | Focus trapping |
-| **Scroll-behavior** | Anchor links | `smooth` (CSS) | Section navigation |
-
-**Reduced motion**: All `@keyframes` wrapped in `@media (prefers-reduced-motion: reduce)` → `animation: none; transition: none;`
-
----
-
-## 6. Data Visualization Language
-
-### 6.1 Gaussian Curve (Statistical Dispersion)
-
-- **Canvas**: SVG `viewBox="0 0 500 200"` inside `.product-ui-panel`
-- **Curve**: Cubic Bézier approximating normal distribution
-- **Confidence band**: Gradient fill (`--color-fern` 40% → 5%) between `±1.96σ`
-- **Median line**: Vertical dashed `amber-compass` at center
-- **Data points**: Amber circles (validated), Red circles (outliers `±1.96σ`)
-- **Labels**: Mono, `±1.96σ (R$ X.k)`, `MEDIANA (R$ Y.k)`
-
-### 6.2 Price Pills (Map Markers)
-
-- **Format**: `R$ 1.35 M` (sale ≥ 1M) or `R$ 450 mil` (sale < 1M) or `R$ 3.200/mês` (rent)
-- **States**: Default (white), Active (amber + white text + scale), Deal (dark green + ★ TOP badge)
-- **Anatomy**: Rounded pill (20px radius) + triangular tip (CSS `::after`)
-- **Hover**: Scale 1.1, z-index 9999, shadow elevation
-
-### 6.3 Neighborhood Chips (Map Filter Bar)
-
-- **Content**: `Bairro Name  R$ 10.450/m²` (live m² price for selected business type)
-- **Selected**: `moss-canvas` bg, white text, amber price
-- **Unselected**: White/94% bg, dark text, muted price
-
-### 6.4 Comparison Table (NeighborhoodMatrix)
-
-- **Header**: `deep-bog` bg, `limestone` mono uppercase labels, sortable (`ArrowUpDown`)
-- **Rows**: `fern` surface, `lichen` dividers, hover `moss-canvas/60`
-- **Key columns**: Valor/m² (amber mono 700), Mediano (bone-white 500), σ (mono badge on `forest-floor`), Amostras (mono)
-- **Action**: Ghost button "Ver no Mapa" → scrolls to map + selects neighborhood
-
----
-
-## 7. Accessibility (WCAG AA)
-
-| Requirement | Implementation |
-|-------------|----------------|
-| **Color contrast** | All text ≥ 4.5:1 (parchment on moss-canvas = 7.2:1; amber on white = 4.6:1) |
-| **Focus visible** | Custom `:focus-visible` rings using `amber-dim` (see globals.css) |
-| **Keyboard nav** | All interactive elements reachable; modal traps focus; map markers focusable via `tabindex=0` |
-| **ARIA labels** | Icon-only buttons have `aria-label`; live regions for ticker/search feedback |
-| **Semantic HTML** | `<nav>`, `<main>`, `<section>`, `<table>`, `<thead>`, `<tbody>`, `<button>`, `<form>` |
-| **Reduced motion** | `@media (prefers-reduced-motion: reduce)` disables all non-essential animation |
-| **Alt text** | All property images have descriptive `alt` (title + neighborhood) |
-| **Language** | `lang="pt-BR"` on `<html>` |
-
----
-
-## 8. Responsive Breakpoints
-
-| Breakpoint | Width | Key Changes |
-|------------|-------|-------------|
-| **Mobile** | `< 640px` | Hero title 44px; nav → drawer; map 400px tall; table horizontal scroll; grid → 1col |
-| **Tablet** | `640–1024px` | Hero title 56px; map 600px; feature grids 2→1 col; matrix table scroll |
-| **Desktop** | `> 1024px` | Full layout; hero 80px; map 780px; 3-col feature grids; side-by-side panels |
-
-**Container query pattern**: Components use `max-width: var(--page-max-width); margin: 0 auto; padding: 0 24px;` — no global container component.
-
----
-
-## 9. Content & Copy Principles
-
-- **Voice**: Technical but accessible. "Mediana real", "Corte algorítmico de outliers", "Prêmio de valorização".
-- **Active verbs**: "Explorar Atlas", "Popular Banco", "Ver no Mapa", "Localizar".
-- **Specificity over cleverness**: "14.280+ Imóveis georreferenciados" not "Milhares de imóveis".
-- **Units always visible**: `R$ 10.450/m²`, `± 1.2 σ`, `47 Bairros`, `0.04s`.
-- **Error states**: Directional, not apologetic. "API retornou status HTTP 500. Verifique se `dotnet run` está ativo."
-- **Empty states**: Invitation to act. "Banco vazio → Clique em Popular Banco (Seed)".
-
----
-
-## 10. Integration Contracts (Frontend ↔ Backend)
-
-### 10.1 Environment
-
-```env
-NEXT_PUBLIC_API_URL=http://localhost:5209   # ASP.NET Core Web API
-```
-
-### 10.2 API Endpoints Consumed
-
-| Endpoint | Method | Params | Response | Used By |
-|----------|--------|--------|----------|---------|
-| `/api/imoveis` | GET | `tipoNegocio`, `page`, `pageSize` | `{ items: Imovel[], totalCount }` | MapExplorer, DashboardModal |
-| `/api/analise/bairro/{id}` | GET | `tipoNegocio` | `AnaliseRegiao` | DashboardModal |
-| `/api/seed` | POST | — | `{ success: boolean }` | DashboardModal (seed button) |
-| `/api/ingest/run` | POST | `{ city, state, businessType, pages }` | `{ ingested: number }` | DashboardModal (fallback seed) |
-
-### 10.3 TypeScript Contracts (Shared with Backend via OpenAPI ideal)
-
-```typescript
-// CartographicMapExplorer.tsx:42-69
-interface PropertyData {
-  id: string;
-  title: string;
-  address: string;
-  cep: string;
-  neighborhood: string;
-  city: string;
-  state: string;
-  price: number;
-  rentPrice: number;
-  areaM2: number;
-  bedrooms: number;
-  bathrooms: number;
-  suites?: number;
-  parking: number;
-  condoFee?: number;
-  iptu?: number;
-  m2Price: number;
-  lat: number;
-  lng: number;
-  type: "Apartamento" | "Cobertura" | "Studio" | "Casa" | "Garden" | "Comercial";
-  isDeal?: boolean;
-  dealDiscountPercent?: number;
-  imageUrl?: string;
-  images: string[];
-  amenities?: string[];
-  description?: string;
+/* Display & Headlines */
+.font-display {
+  font-family: var(--font-display-serif), "Source Serif 4", Georgia, serif;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
 }
 
-// DashboardModal.tsx:8-25
-type Analise = {
-  bairroId?: string;
-  tipoNegocio?: "Sale" | "Rent";
-  precoMedio?: number;
-  precoMediano?: number;
-  precoM2Medio?: number;
-  desvioPadraoAmostral?: number;
-  amostraCount?: number;
-  atualizadoEm?: string;
-};
+.font-headline {
+  font-family: var(--font-display-serif), "Source Serif 4", Georgia, serif;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+
+/* Body & Labels */
+.font-body {
+  font-family: var(--font-body-sans), "Inter", sans-serif;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.font-label {
+  font-family: var(--font-body-sans), "Inter", sans-serif;
+  font-weight: 500;
+  line-height: 1.2;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.font-mono {
+  font-family: var(--font-code-mono), "JetBrains Mono", monospace;
+}
 ```
 
-> **Note**: Backend uses snake_case (`preco_medio`), frontend handles both via `??` fallback.
-
 ---
 
-## 11. Performance & Quality Checklist
+### 2.3 Espaçamento & Grid
 
-- [ ] **Next.js 15 (Turbopack)** — `next dev` for development
-- [ ] **TypeScript strict** — `tsconfig.json` strict mode, no `any` in components
-- [ ] **ESLint 9 + Next config** — `npm run lint` passes
-- [ ] **Bundle analysis** — Leaflet loaded dynamically via `import("leaflet")` (code-split)
-- [ ] **Fonts** — `next/font` for Fraunces, Plus Jakarta Sans, JetBrains Mono (preload)
-- [ ] **Images** — External CDN (VivaReal/ZAP), `next/image` not used (external domains)
-- [ ] **Hydration** — All interactive components marked `"use client"`; SSR-safe guards (`typeof window`)
-- [ ] **Scroll restoration** — Manual `scrollIntoView` for section links
-
----
-
-## 12. Extending the Design System
-
-### Adding a New Component
-
-1. **Create** `src/components/NewComponent.tsx` with `"use client"` if interactive
-2. **Consume tokens only** — `var(--color-*)`, `var(--font-*)`, `var(--spacing-*)`, `var(--radius-*)`
-3. **Follow surface hierarchy** — choose correct background/border from Section 4.2
-4. **Add utility classes** to `globals.css` if pattern repeats (buttons, badges, surfaces)
-5. **Test** at all three breakpoints + reduced motion + keyboard only
-
-### Adding a New Color Semantic
-
-**Don't.** Extend via opacity: `rgba(var(--color-amber-compass-rgb), 0.15)` — but CSS vars don't support RGB decomposition. Instead, add a new token in `globals.css:1-51` with a clear semantic name (e.g., `--color-amber-subtle`).
-
-### Adding a New Type Scale
-
-Add to `globals.css:78-132` following the `.serif-*` / `.sans-*` naming. Use `clamp()` for fluid scaling.
-
----
-
-## 13. Known Limitations & Technical Debt
-
-| Area | Issue | Mitigation |
-|------|-------|------------|
-| **Leaflet SSR** | Dynamic import required; no SSR map | `useEffect` + `typeof window` guard |
-| **Google Tiles** | Unofficial tile URLs (`mt1.google.com`) | Fallback to Carto Voyager/Dark; monitor TOS |
-| **Nominatim Geocoding** | Rate-limited, no API key | Client-side only; debounce; graceful fallback |
-| **Mock Neighborhood Data** | Hardcoded `NEIGHBORHOODS` array (8 bairros) | Replace with `/api/bairros` endpoint when backend ready |
-| **Dashboard UUIDs** | Hardcoded UUID ↔ bairro mapping | Backend should return `bairroId` ↔ `nome` lookup |
-| **Chart.js not yet used** | Gaussian curve is hand-coded SVG | Migrate to Chart.js when histograms needed |
-| **No test suite** | Jest/Playwright not configured | Add `npm test` script + CI |
-
----
-
-## 14. Quick Reference: Class & Token Cheatsheet
+- **Base Unit**: `8px` (`--space-unit: 8px`)
+- **Margin Desktop**: `40px` (`--margin-desktop: 40px`)
+- **Margin Mobile**: `16px` (`--margin-mobile: 16px`)
+- **Section Gap**: `80px` (`--section-gap: 80px`)
+- **Gutter**: `24px` (`--gutter: 24px`)
 
 ```css
-/* Surfaces */
-.surface-fern       /* fern bg + lichen border */
-.surface-forest     /* forest-floor bg + lichen border */
-.surface-deep-bog   /* deep-bog bg + lichen border */
-.product-ui-panel   /* bone-white bg + charcoal text + shadow-panel */
-
-/* Typography */
-.serif-display      /* 80px/0.88, Fraunces 300 */
-.serif-heading-lg   /* 48px/0.96, Fraunces 300 */
-.serif-heading      /* 36px/1.0, Fraunces 300 */
-.serif-heading-sm   /* 24px/1.11, Fraunces 300 */
-.sans-body          /* 16px/1.5, Plus Jakarta Sans 400 */
-.sans-subheading    /* 18px/1.4, Plus Jakarta Sans 400 */
-.sans-caption       /* 12px/1.43, Plus Jakarta Sans 400 */
-
-/* Buttons */
-.btn-amber          /* Primary CTA */
-.btn-ghost-link     /* Secondary text link */
-.btn-fern           /* Tertiary action */
-
-/* Badges */
-.badge-limestone    /* limestone bg, deep-bog text, mono uppercase */
-.badge-moss         /* forest-floor bg, amber text, mono uppercase */
-
-/* Map Specific */
-.price-pill-marker  /* Wrapper for pin positioning */
-.price-pill-bubble  /* Price pill visual (white/amber/deal) */
-.neighborhood-map-label /* Geo label on map */
+:root {
+  --spacing-1: 4px;
+  --spacing-2: 8px;
+  --spacing-3: 12px;
+  --spacing-4: 16px;
+  --spacing-5: 20px;
+  --spacing-6: 24px;
+  --spacing-8: 32px;
+  --spacing-10: 40px;
+  --spacing-12: 48px;
+  --spacing-16: 64px;
+  --spacing-20: 80px;
+}
 ```
 
 ---
 
-## 15. Changelog
+### 2.4 Componentes & Superfícies (Roundness & Elevation)
 
-| Date | Version | Changes |
-|------|---------|---------|
-| 2026-08-26 | 1.0 | Initial design system documentation from existing codebase |
+- **Arredondamento Padrão**: `ROUND_FOUR` (4px).  
+  - Botões, inputs, cards, modais e abas usam `border-radius: 4px;`  
+  - Badges compactos usam `border-radius: 4px;` ou `border-radius: 2px;`  
+  - Marcadores de mapa (*price pills*) mantêm formato funcional de pílula retangular arredondada compacta (4px com ponta discreta).
+- **Elevação**: `Flat`.  
+  - Eliminação de sombras difusas exageradas.
+  - Separação entre camadas feita por cores de containers (`surface-container-low` → `surface-container` → `surface-container-high`) e bordas técnicas finas (`1px solid var(--color-outline-variant)`).
 
 ---
 
-**Maintained by**: Senior Full-Stack Engineer & Software Architect  
-**Stack**: Next.js 15 + React 19 + TypeScript + Leaflet + Lucide Icons  
-**Backend**: ASP.NET Core Web API + EF Core + Neon PostgreSQL
+## 3. Arquitetura Modular da Aplicação (SPA)
+
+### 3.1 Estrutura de Layout SPA
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Barra Superior Global (TickerBar / Status de Conexão Neon)                  │
+├──────────────┬──────────────────────────────────────────────────────────────┤
+│ SIDEBAR      │ ÁREA PRINCIPAL DA TELA (Main Viewport)                       │
+│ FIXA         │                                                              │
+│ (260px)      │ [Tela Ativa: transição suave de opacidade e translação]      │
+│              │                                                              │
+│ • Logo       │ • Tela 1: Mapa Interativo (GIS Hero Viewport)               │
+│ • Nav Grupo  │ • Tela 2: Análise Estatística (DataViz & Dispersão)          │
+│   ├ Mapa GIS │ • Tela 3: Simulador de Avaliação (Calculadora de Valor)      │
+│   ├ Análise  │ • Tela 4: Índice de Bairros (Matriz de Comparação Regional)  │
+│   ├ Simulador│                                                              │
+│   └ Bairros  │                                                              │
+│ • Filtro     │                                                              │
+│   Venda/Alug.│                                                              │
+│ • Status DB  │                                                              │
+└──────────────┴──────────────────────────────────────────────────────────────┘
+```
+
+### 3.2 Módulos e Telas do Sistema
+
+#### Tela 1: Mapa Interativo (GIS Explorer)
+- **Papel**: "Hero" imersivo de exploração espacial.
+- **Estrutura**: Viewport de mapa ocupando 100% da área útil disponível.
+- **Elementos Integrados**:
+  - Controles flutuantes de camadas (Satélite, Dark GIS, Heatmap de Preço/m²).
+  - Barra superior de busca por CEP/Endereço e filtro rápido por tipo de imóvel (Apartamento, Casa, etc.).
+  - Marcadores interativos de preço com destaque para oportunidades calculadas estatisticamente (`dealBadge`).
+  - Drawer lateral retrátil com detalhes do imóvel selecionado, galeria de fotos e métricas em relação à média do bairro.
+
+#### Tela 2: Análise Estatística (DataViz & Dispersão)
+- **Papel**: Central analítica de inteligência de mercado e visualização de dados.
+- **Estrutura**: Dashboard em grid com foco em alta legibilidade.
+- **Elementos Integrados**:
+  - Gráfico de Curva Gaussiana (Distribuição Normal) com bandas de confiança ajustáveis (90%, 95%, 99%) e corte automático de outliers ($\pm 1.96\sigma$).
+  - Gráfico de dispersão Preço vs. Área ($m^2$) para identificação de distorções de precificação.
+  - Indicadores chave de performance (Mediana Real, Média Aritmética, Desvio Padrão Amostral, Número de Amostras Válidas).
+  - Decomposição das camadas de infraestrutura urbana (Impacto de transporte, zoneamento e relevo).
+
+#### Tela 3: Simulador de Valor (Valuation Calculator)
+- **Papel**: Ferramenta interativa de avaliação instantânea de imóveis.
+- **Estrutura**: Interface orientada a entradas de parâmetros (Sliders + Inputs numéricos).
+- **Elementos Integrados**:
+  - Sliders para Área Útil ($m^2$), Quartos, Vagas de Garagem e Bairro.
+  - Cálculo instantâneo do valor estimado de venda e locação com base na mediana do m² e desvio padrão.
+  - Faixa de valor justo (*fair value range*) com limites inferior e superior baseados no rigor estatístico.
+
+#### Tela 4: Índice de Bairros (Matriz Regional)
+- **Papel**: Tabela comparativa avançada e inteligência de micro-regiões.
+- **Estrutura**: Tabela de alta densidade informativa com ordenação multi-coluna e busca textual.
+- **Elementos Integrados**:
+  - Métricas comparativas: Preço Médio/m², Mediana Real, Desvio Padrão ($\sigma$), Total de Amostras, Índice de Liquidez.
+  - Filtro por modalidade (Venda / Aluguel).
+  - Ação rápida "Explorar no Mapa" que transfere o contexto espacial diretamente para a Tela 1 com foco no bairro selecionado.
+
+---
+
+## 4. Transições de Navegação e Estados
+
+- **Troca de Telas**: Suave transição através de `opacity` (0.2s) e sutil translação vertical (`translateY(4px) -> translateY(0)`), evitando recarregamentos bruscos e mantendo o contexto de dados na memória.
+- **Preservação de Estado**: Filtros ativos (tipo de negócio Venda/Locação, bairro selecionado, faixa de preço) são mantidos compartilhados entre as telas através de estado unificado.
+- **Acessibilidade**: Suporte a navegação por teclado (`Tab`, setas nos menus da Sidebar) com anéis de foco visíveis em `--color-primary`.
+
+---
+
+## 5. Eliminação de Débito Técnico & Integração com Backend
+
+1. **Remoção de Código SQL da Interface do Usuário**: A consulta bruta SQL que poluía a tela de apresentação foi removida da visualização principal. Toda comunicação é tratada transparentemente pelos endpoints da API (`/api/imoveis`, `/api/analise/bairro/{id}`, `/api/seed`).
+2. **Modal de Diagnóstico / Inspetor Opcional**: O acesso às consultas e diagnóstico do banco de dados Neon é mantido apenas como ferramenta técnica de depuração, acessível discretamente via rodapé da sidebar.
+3. **Consistência de Tipos TypeScript**: Alinhamento estrito dos contratos entre frontend e backend (com suporte a fallback para dados mockados em caso de indisponibilidade da API local).
+
+---
+
+## 6. Histórico de Versões
+
+| Versão | Data | Autor | Principais Alterações |
+|---|---|---|---|
+| **2.0** | 2026-08-31 | Frontend Lead / Architect | Transição completa para **Azure Geomatics**, adoção do modelo SPA com Sidebar fixa, tipografia Source Serif 4 + Inter, modularização das 4 telas e remoção de débito SQL. |
+| **1.0** | 2026-08-26 | Dev Team | Versão inicial em Long Scroll (Tema Moss/Forest). |
