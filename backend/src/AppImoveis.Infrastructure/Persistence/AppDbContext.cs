@@ -14,10 +14,30 @@ public class AppDbContext : DbContext
     public DbSet<Imovel> Imoveis => Set<Imovel>();
     public DbSet<HistoricoPreco> HistoricoPrecos => Set<HistoricoPreco>();
     public DbSet<AnaliseRegiao> AnalisesRegiao => Set<AnaliseRegiao>();
+    public DbSet<HistoricoVarredura> HistoricoVarreduras => Set<HistoricoVarredura>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.HasPostgresEnum<TipoNegocio>("tipo_negocio");
+
+        modelBuilder.Entity<HistoricoVarredura>(entity =>
+        {
+            entity.ToTable("historico_varreduras");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.Cidade).HasColumnName("cidade").HasMaxLength(120).IsRequired();
+            entity.Property(x => x.Estado).HasColumnName("estado").HasMaxLength(80).IsRequired();
+            entity.Property(x => x.BairroTermo).HasColumnName("bairro_termo").HasMaxLength(200).IsRequired();
+            entity.Property(x => x.TipoNegocio).HasColumnName("tipo_negocio");
+            entity.Property(x => x.PaginaConsultada).HasColumnName("pagina_consultada");
+            entity.Property(x => x.TotalEncontrados).HasColumnName("total_encontrados");
+            entity.Property(x => x.NovosIngeridos).HasColumnName("novos_ingeridos");
+            entity.Property(x => x.DuplicadosIgnorados).HasColumnName("duplicados_ignorados");
+            entity.Property(x => x.ApiKeyUtilizadaReduzida).HasColumnName("api_key_utilizada_reduzida").HasMaxLength(50);
+            entity.Property(x => x.DataConsulta).HasColumnName("data_consulta");
+
+            entity.HasIndex(x => new { x.Cidade, x.BairroTermo, x.TipoNegocio });
+        });
 
         modelBuilder.Entity<Bairro>(entity =>
         {
@@ -105,6 +125,11 @@ public class AppDbContext : DbContext
             entity.Property(x => x.DesvioPadraoAmostral).HasColumnName("desvio_padrao_amostral").HasPrecision(18, 2);
             entity.Property(x => x.AmostraCount).HasColumnName("amostra_count");
             entity.Property(x => x.AtualizadoEm).HasColumnName("atualizado_em");
+
+            entity.HasOne(x => x.Bairro)
+                .WithMany()
+                .HasForeignKey(x => x.BairroId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         // Universal snake_case fallback for any entity or shadow property

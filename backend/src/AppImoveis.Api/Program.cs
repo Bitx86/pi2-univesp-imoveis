@@ -63,6 +63,8 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 
 builder.Services.AddScoped<BairroRepository>();
 builder.Services.AddScoped<ImovelRepository>();
+builder.Services.AddSingleton<GeckoApiKeyPoolManager>();
+builder.Services.AddScoped<SmartSearchMatrixEngine>();
 builder.Services.AddHttpClient<GeckoApiIngestService>();
 
 builder.Services.AddOpenApi();
@@ -99,6 +101,89 @@ if (app.Environment.IsDevelopment())
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok", time = DateTimeOffset.UtcNow }));
 
+app.MapGet("/api/bairros", async (AppDbContext dbContext, [FromQuery] string? tipoNegocio, CancellationToken cancellationToken) =>
+{
+    var bairros = await dbContext.Bairros.AsNoTracking().OrderBy(b => b.Nome).ToListAsync(cancellationToken);
+    var analises = await dbContext.AnalisesRegiao.AsNoTracking().ToListAsync(cancellationToken);
+    var counts = await dbContext.Imoveis
+        .AsNoTracking()
+        .GroupBy(i => new { i.BairroId, i.TipoNegocio })
+        .Select(g => new { g.Key.BairroId, g.Key.TipoNegocio, Count = g.Count() })
+        .ToListAsync(cancellationToken);
+
+    var result = bairros.Select(b =>
+    {
+        var vendaCount = counts.FirstOrDefault(c => c.BairroId == b.Id && c.TipoNegocio == TipoNegocio.Sale)?.Count ?? 0;
+        var aluguelCount = counts.FirstOrDefault(c => c.BairroId == b.Id && c.TipoNegocio == TipoNegocio.Rent)?.Count ?? 0;
+        var analiseVenda = analises.FirstOrDefault(a => a.BairroId == b.Id && a.TipoNegocio == TipoNegocio.Sale);
+        var analiseAluguel = analises.FirstOrDefault(a => a.BairroId == b.Id && a.TipoNegocio == TipoNegocio.Rent);
+
+        return new
+        {
+            id = b.Id,
+            nome = b.Nome,
+            cidade = b.Cidade,
+            estado = b.Estado,
+            total_imoveis_venda = vendaCount,
+            total_imoveis_aluguel = aluguelCount,
+            total_geral = vendaCount + aluguelCount,
+            analise_venda = analiseVenda != null ? new
+            {
+                preco_medio = analiseVenda.PrecoMedio,
+                preco_mediano = analiseVenda.PrecoMediano,
+                preco_m2_medio = analiseVenda.PrecoM2Medio,
+                desvio_padrao = analiseVenda.DesvioPadraoAmostral,
+                amostra_count = analiseVenda.AmostraCount,
+                atualizado_em = analiseVenda.AtualizadoEm
+            } : null,
+            analise_aluguel = analiseAluguel != null ? new
+            {
+                preco_medio = analiseAluguel.PrecoMedio,
+                preco_mediano = analiseAluguel.PrecoMediano,
+                preco_m2_medio = analiseAluguel.PrecoM2Medio,
+                desvio_padrao = analiseAluguel.DesvioPadraoAmostral,
+                amostra_count = analiseAluguel.AmostraCount,
+                atualizado_em = analiseAluguel.AtualizadoEm
+            } : null
+        };
+    }).ToList();
+
+    return Results.Ok(result);
+});
+
+app.MapGet("/api/analise/regioes", async (AppDbContext dbContext, [FromQuery] string? tipoNegocio, CancellationToken cancellationToken) =>
+{
+    var query = dbContext.AnalisesRegiao
+        .Include(a => a.Bairro)
+        .AsNoTracking()
+        .AsQueryable();
+
+    if (!string.IsNullOrWhiteSpace(tipoNegocio) && Enum.TryParse<TipoNegocio>(tipoNegocio, true, out var tipo))
+    {
+        query = query.Where(a => a.TipoNegocio == tipo);
+    }
+
+    var analises = await query
+        .OrderByDescending(a => a.AmostraCount)
+        .ToListAsync(cancellationToken);
+
+    var result = analises.Select(a => new
+    {
+        bairro_id = a.BairroId,
+        bairro_nome = a.Bairro?.Nome ?? "Desconhecido",
+        cidade = a.Bairro?.Cidade ?? "Guarulhos",
+        tipo_negocio = a.TipoNegocio.ToString(),
+        preco_medio = a.PrecoMedio,
+        preco_mediano = a.PrecoMediano,
+        preco_m2_medio = a.PrecoM2Medio,
+        desvio_padrao_amostral = a.DesvioPadraoAmostral,
+        amostra_count = a.AmostraCount,
+        atualizado_em = a.AtualizadoEm
+    });
+
+    return Results.Ok(result);
+});
+
 app.MapGet("/api/analise/bairro/{bairroId:guid}", async (Guid bairroId, [FromQuery] string tipoNegocio, AppDbContext dbContext, CancellationToken cancellationToken) =>
 {
     if (string.IsNullOrWhiteSpace(tipoNegocio))
@@ -111,6 +196,30 @@ app.MapGet("/api/analise/bairro/{bairroId:guid}", async (Guid bairroId, [FromQue
         return Results.BadRequest(new { message = "tipo_negocio must be Sale or Rent" });
     }
 
+    // 1. Direct fetch from precalculated analise_regiao table
+    var persisted = await dbContext.AnalisesRegiao
+        .Include(a => a.Bairro)
+        .AsNoTracking()
+        .FirstOrDefaultAsync(a => a.BairroId == bairroId && a.TipoNegocio == tipo, cancellationToken);
+
+    if (persisted != null)
+    {
+        return Results.Ok(new
+        {
+            bairro_id = bairroId,
+            bairro_nome = persisted.Bairro?.Nome ?? "",
+            tipo_negocio = tipo.ToString(),
+            preco_medio = persisted.PrecoMedio,
+            preco_mediano = persisted.PrecoMediano,
+            preco_m2_medio = persisted.PrecoM2Medio,
+            desvio_padrao_amostral = persisted.DesvioPadraoAmostral,
+            amostra_count = persisted.AmostraCount,
+            atualizado_em = persisted.AtualizadoEm,
+            fonte = "analise_regiao"
+        });
+    }
+
+    // 2. Fallback on-the-fly calculation
     var dados = await dbContext.Imoveis
         .AsNoTracking()
         .Where(x => x.BairroId == bairroId && x.TipoNegocio == tipo)
@@ -131,7 +240,8 @@ app.MapGet("/api/analise/bairro/{bairroId:guid}", async (Guid bairroId, [FromQue
         preco_m2_medio = analise.PrecoM2Medio,
         desvio_padrao_amostral = analise.DesvioPadraoAmostral,
         amostra_count = analise.AmostraCount,
-        atualizado_em = analise.AtualizadoEm
+        atualizado_em = analise.AtualizadoEm,
+        fonte = "amostral_dinamico"
     });
 });
 
@@ -259,37 +369,108 @@ app.MapPost("/api/ingest/run", async (IngestRunRequest request, GeckoApiIngestSe
     }
 });
 
+app.MapGet("/api/seed/status", async (SmartSearchMatrixEngine searchEngine, GeckoApiKeyPoolManager keyPool, CancellationToken cancellationToken) =>
+{
+    var coverage = await searchEngine.GetDatabaseCoverageAsync(cancellationToken);
+    var keys = keyPool.GetPoolStats();
+
+    return Results.Ok(new
+    {
+        cobertura = coverage,
+        keys_status = keys
+    });
+});
+
+app.MapPost("/api/seed/step", async ([FromQuery] string? tipo, GeckoApiIngestService ingestService, CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var stepResult = await ingestService.RunSingleSmartSeedStepAsync(tipo, cancellationToken);
+        return Results.Ok(stepResult);
+    }
+    catch (InvalidOperationException ex) when (ex.Message == "ingest in progress")
+    {
+        return Results.Conflict(new { message = "Um processo de seed/ingestão já está em andamento." });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(statusCode: 500, title: "Falha na execução do ciclo", detail: ex.Message);
+    }
+});
+
+app.MapPost("/api/seed", async ([FromQuery] int? cycles, GeckoApiIngestService ingestService, CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var smartResult = await ingestService.RunSmartSeedAsync(cycles ?? 4, cancellationToken);
+        return Results.Ok(smartResult);
+    }
+    catch (InvalidOperationException ex) when (ex.Message == "ingest in progress")
+    {
+        return Results.Conflict(new { message = "Um processo de seed/ingestão já está em andamento." });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(statusCode: 500, title: "Falha na execução do Seed", detail: ex.Message);
+    }
+});
+
+app.MapPost("/api/seed/recalculate", async (GeckoApiIngestService ingestService, CancellationToken cancellationToken) =>
+{
+    try
+    {
+        await ingestService.RecalcularTodasAnalisesRegionaisAsync(cancellationToken);
+        return Results.Ok(new { message = "Tabela analise_regiao recalculada com sucesso para todos os bairros!" });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(statusCode: 500, detail: ex.Message);
+    }
+});
+
+app.MapPost("/api/seed/export-sql", async (GeckoApiIngestService ingestService, CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var sql = await ingestService.ExportSqlSnapshotAsync(cancellationToken);
+        var scriptPath = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "scripts", "02_seed_neon.sql");
+        var resolvedPath = Path.GetFullPath(scriptPath);
+        
+        var dir = Path.GetDirectoryName(resolvedPath);
+        if (dir != null && Directory.Exists(dir))
+        {
+            await File.WriteAllTextAsync(resolvedPath, sql, cancellationToken);
+        }
+
+        return Results.Ok(new
+        {
+            message = "Snapshot SQL gerado com sucesso com dados 100% reais!",
+            caminho_arquivo = resolvedPath,
+            tamanho_bytes = sql.Length,
+            linhas = sql.Split('\n').Length
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(statusCode: 500, detail: ex.Message);
+    }
+});
+
 app.MapPost("/api/db/reset", async (AppDbContext dbContext, GeckoApiIngestService ingestService, CancellationToken cancellationToken) =>
 {
     // Drop and recreate schema cleanly
     await dbContext.Database.EnsureDeletedAsync(cancellationToken);
     await dbContext.Database.EnsureCreatedAsync(cancellationToken);
 
-    // Run fresh seed with PDP data
-    var resultSale = await ingestService.RunAsync("Guarulhos", "SP", TipoNegocio.Sale, 1, null, cancellationToken);
-    var resultRent = await ingestService.RunAsync("Guarulhos", "SP", TipoNegocio.Rent, 1, null, cancellationToken);
+    // Run smart seed with initial cycles
+    var smartResult = await ingestService.RunSmartSeedAsync(4, cancellationToken);
 
     return Results.Ok(new
     {
-        message = "Banco Neon recriado e populado com sucesso!",
-        venda_inseridos = resultSale.Ingrested,
-        aluguel_inseridos = resultRent.Ingrested,
-        total = resultSale.Ingrested + resultRent.Ingrested
-    });
-});
-
-app.MapPost("/api/seed", async (GeckoApiIngestService ingestService, CancellationToken cancellationToken) =>
-{
-    var resultSale = await ingestService.RunAsync("Guarulhos", "SP", TipoNegocio.Sale, 2, null, cancellationToken);
-    var resultRent = await ingestService.RunAsync("Guarulhos", "SP", TipoNegocio.Rent, 2, null, cancellationToken);
-
-    return Results.Ok(new
-    {
-        message = "Banco de dados populado com sucesso!",
-        venda_inseridos = resultSale.Ingrested,
-        aluguel_inseridos = resultRent.Ingrested,
-        duplicados = resultSale.SkippedDuplicates + resultRent.SkippedDuplicates,
-        total_processados = resultSale.Ingrested + resultRent.Ingrested
+        message = "Banco Neon recriado e populado com sucesso com dados 100% reais!",
+        novos_ingeridos = smartResult.TotalNovosIngeridos,
+        ciclos = smartResult.CiclosExecutados,
+        cobertura = smartResult.CoberturaAtual
     });
 });
 

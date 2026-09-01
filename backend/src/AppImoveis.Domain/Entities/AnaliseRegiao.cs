@@ -3,6 +3,7 @@ namespace AppImoveis.Domain.Entities;
 public class AnaliseRegiao
 {
     public Guid BairroId { get; set; }
+    public Bairro? Bairro { get; set; }
     public TipoNegocio TipoNegocio { get; set; }
     public decimal PrecoMedio { get; set; }
     public decimal PrecoMediano { get; set; }

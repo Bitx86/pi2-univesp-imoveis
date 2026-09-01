@@ -85,6 +85,20 @@ CREATE TABLE analise_regiao (
         ON DELETE CASCADE
 );
 
+CREATE TABLE historico_varreduras (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    cidade TEXT NOT NULL,
+    estado TEXT NOT NULL,
+    bairro_termo TEXT NOT NULL,
+    tipo_negocio tipo_negocio NOT NULL,
+    pagina_consultada INTEGER NOT NULL,
+    total_encontrados INTEGER NOT NULL DEFAULT 0,
+    novos_ingeridos INTEGER NOT NULL DEFAULT 0,
+    duplicados_ignorados INTEGER NOT NULL DEFAULT 0,
+    api_key_utilizada_reduzida TEXT NULL,
+    data_consulta TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- Índices de Alta Performance
 CREATE INDEX idx_bairros_nome_cidade_estado ON bairros (nome, cidade, estado);
 CREATE INDEX idx_imoveis_bairro_id ON imoveis (bairro_id);
@@ -95,3 +109,5 @@ CREATE INDEX idx_imoveis_bairro_tipo_negocio ON imoveis (bairro_id, tipo_negocio
 CREATE INDEX idx_imoveis_fonte_external_id ON imoveis (fonte, external_id);
 CREATE INDEX idx_historico_precos_imovel_id ON historico_precos (imovel_id);
 CREATE INDEX idx_analise_regiao_bairro_id ON analise_regiao (bairro_id);
+CREATE INDEX idx_historico_varreduras_termo ON historico_varreduras (cidade, bairro_termo, tipo_negocio);
+

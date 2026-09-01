@@ -1,13 +1,52 @@
 using System.Net;
+using System.Text;
 using System.Text.Json;
-using System.Text.RegularExpressions;
+using AppImoveis.Application.Services;
 using AppImoveis.Domain.Entities;
 using AppImoveis.Infrastructure.Persistence;
 using AppImoveis.Infrastructure.Repositories;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
 namespace AppImoveis.Infrastructure.Services;
+
+public class SmartSeedResult
+{
+    public string Message { get; set; } = string.Empty;
+    public int TotalNovosIngeridos { get; set; }
+    public int TotalDuplicadosVerificados { get; set; }
+    public int TotalErros { get; set; }
+    public int CiclosExecutados { get; set; }
+    public bool QuotaEsgotada { get; set; }
+    public ApiKeyPoolStats ApiKeysStats { get; set; } = new();
+    public List<SearchCycleSummary> Ciclos { get; set; } = new();
+    public List<BairroCoverageStatus> CoberturaAtual { get; set; } = new();
+}
+
+public class SearchCycleSummary
+{
+    public string Termo { get; set; } = string.Empty;
+    public TipoNegocio TipoNegocio { get; set; }
+    public int Pagina { get; set; }
+    public string Motivo { get; set; } = string.Empty;
+    public int Encontrados { get; set; }
+    public int NovosIngeridos { get; set; }
+    public int Duplicados { get; set; }
+    public string ApiKeyUtilizada { get; set; } = string.Empty;
+    public bool Sucesso { get; set; }
+}
+
+public class SmartSeedStepResult
+{
+    public SearchCycleSummary Ciclo { get; set; } = new();
+    public int TotalNovos { get; set; }
+    public int TotalDuplicados { get; set; }
+    public bool QuotaEsgotada { get; set; }
+    public string Message { get; set; } = string.Empty;
+    public List<BairroCoverageStatus> CoberturaAtual { get; set; } = new();
+    public ApiKeyPoolStats ApiKeysStats { get; set; } = new();
+}
 
 public class GeckoApiIngestService
 {
@@ -15,6 +54,8 @@ public class GeckoApiIngestService
     private readonly AppDbContext _context;
     private readonly BairroRepository _bairroRepository;
     private readonly ImovelRepository _imovelRepository;
+    private readonly GeckoApiKeyPoolManager _apiKeyPoolManager;
+    private readonly SmartSearchMatrixEngine _searchMatrixEngine;
     private readonly IConfiguration _configuration;
     private readonly ILogger<GeckoApiIngestService> _logger;
 
@@ -26,6 +67,8 @@ public class GeckoApiIngestService
         AppDbContext context,
         BairroRepository bairroRepository,
         ImovelRepository imovelRepository,
+        GeckoApiKeyPoolManager apiKeyPoolManager,
+        SmartSearchMatrixEngine searchMatrixEngine,
         IConfiguration configuration,
         ILogger<GeckoApiIngestService> logger)
     {
@@ -33,31 +76,457 @@ public class GeckoApiIngestService
         _context = context;
         _bairroRepository = bairroRepository;
         _imovelRepository = imovelRepository;
+        _apiKeyPoolManager = apiKeyPoolManager;
+        _searchMatrixEngine = searchMatrixEngine;
         _configuration = configuration;
         _logger = logger;
 
-        var baseUrl = configuration["GeckoApi:BaseUrl"] ?? "https://api.geckoapi.com.br";
+        var baseUrl = configuration["GeckoApi:BaseUrl"] 
+                      ?? configuration["GECKO_API_BASE_URL"] 
+                      ?? "https://api.geckoapi.com.br";
         _httpClient.BaseAddress = new Uri(baseUrl);
+    }
 
-        var apiKey = configuration["GECKO_API_KEY"]
-            ?? configuration["GeckoApi:ApiKey"]
-            ?? configuration["GeckoApiKey"]
-            ?? Environment.GetEnvironmentVariable("GECKO_API_KEY");
-
-        if (!string.IsNullOrWhiteSpace(apiKey))
+    /// <summary>
+    /// Executa um ciclo inteligente de Seed: verifica o banco antes de consultar,
+    /// identifica lacunas de dados, planeja consultas com termos/páginas inéditas,
+    /// consome a API externa real com rotação de chaves e recalcula analise_regiao.
+    /// </summary>
+    public async Task<SmartSeedResult> RunSmartSeedAsync(
+        int cycles = 4,
+        CancellationToken cancellationToken = default)
+    {
+        lock (IngestGate)
         {
-            _httpClient.DefaultRequestHeaders.Remove("Authorization");
-            _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {apiKey}");
-            _httpClient.DefaultRequestHeaders.Remove("x-api-key");
-            _httpClient.DefaultRequestHeaders.Add("x-api-key", apiKey);
-            _logger.LogInformation("GeckoApi: API Key configurada com sucesso.");
+            if (_ingestInProgress)
+            {
+                throw new InvalidOperationException("ingest in progress");
+            }
+            _ingestInProgress = true;
         }
-        else
+
+        try
         {
-            _logger.LogWarning("GeckoApi: Nenhuma API Key encontrada (GECKO_API_KEY).");
+            var result = new SmartSeedResult();
+            var targetTypes = new[] { TipoNegocio.Sale, TipoNegocio.Rent };
+            var touchedBairroIds = new HashSet<Guid>();
+
+            // Load all existing external IDs for fast pre-filtering
+            var existingIds = await _searchMatrixEngine.GetExistingExternalIdsAsync(cancellationToken);
+
+            var plannedTermsInBatch = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            for (int i = 0; i < Math.Max(1, cycles); i++)
+            {
+                var tipoNegocio = targetTypes[i % targetTypes.Length];
+                
+                // 1. Check DB and plan next targeted search (excluding terms already planned in this current batch)
+                var plan = await _searchMatrixEngine.PlanNextSearchTargetAsync(tipoNegocio, plannedTermsInBatch, cancellationToken);
+                plannedTermsInBatch.Add(plan.BairroOrKeyword);
+
+                var cycleSummary = new SearchCycleSummary
+                {
+                    Termo = plan.BairroOrKeyword,
+                    TipoNegocio = plan.TipoNegocio,
+                    Pagina = plan.PageToFetch,
+                    Motivo = plan.Reason
+                };
+
+                // 2. Obtain active API key from pool
+                var activeKey = _apiKeyPoolManager.GetActiveKey();
+                if (string.IsNullOrWhiteSpace(activeKey))
+                {
+                    _logger.LogWarning("GeckoApi: Todas as chaves do pool estão esgotadas ou nenhuma chave foi configurada.");
+                    result.QuotaEsgotada = true;
+                    cycleSummary.Sucesso = false;
+                    cycleSummary.ApiKeyUtilizada = "Nenhuma chave disponível";
+                    result.Ciclos.Add(cycleSummary);
+                    break;
+                }
+
+                cycleSummary.ApiKeyUtilizada = _apiKeyPoolManager.GetActiveKeyMasked();
+
+                // 3. Fetch listings with auto-retry across keys in pool
+                List<GeckoPropertyDetailed> items = new();
+                bool fetchSuccess = false;
+
+                while (!fetchSuccess)
+                {
+                    try
+                    {
+                        items = await FetchPropertiesFromPlpWithKeyAsync(
+                            plan.City,
+                            plan.State,
+                            plan.TipoNegocio,
+                            plan.PageToFetch,
+                            plan.BairroOrKeyword,
+                            activeKey,
+                            cancellationToken);
+
+                        _apiKeyPoolManager.ReportSuccess(activeKey, 1);
+                        fetchSuccess = true;
+                    }
+                    catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.TooManyRequests)
+                    {
+                        var rotated = _apiKeyPoolManager.ReportExhaustedOrRateLimited(activeKey);
+                        if (!rotated)
+                        {
+                            result.QuotaEsgotada = true;
+                            break;
+                        }
+                        activeKey = _apiKeyPoolManager.GetActiveKey();
+                        if (activeKey == null)
+                        {
+                            result.QuotaEsgotada = true;
+                            break;
+                        }
+                        cycleSummary.ApiKeyUtilizada = _apiKeyPoolManager.GetActiveKeyMasked();
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Erro ao extrair listagem da GeckoAPI para termo '{Termo}'.", plan.BairroOrKeyword);
+                        break;
+                    }
+                }
+
+                cycleSummary.Encontrados = items.Count;
+                int cycleIngested = 0;
+                int cycleSkipped = 0;
+
+                // 4. Ingest items with deduplication & price history
+                foreach (var item in items)
+                {
+                    if (!TryMapProperty(item, plan.City, plan.State, plan.TipoNegocio, plan.BairroOrKeyword, out var imovel, out var bairroName))
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        var persistedBairro = await _bairroRepository.GetOrCreateAsync(bairroName, plan.City, plan.State, cancellationToken);
+                        imovel.BairroId = persistedBairro.Id;
+                        imovel.Bairro = null;
+                        touchedBairroIds.Add(persistedBairro.Id);
+
+                        var existing = await _imovelRepository.GetByExternalIdAsync(imovel.Fonte, imovel.ExternalId, cancellationToken);
+                        if (existing is not null)
+                        {
+                            var mudouPreco = existing.Preco != imovel.Preco;
+                            existing.Titulo = imovel.Titulo;
+                            existing.Descricao = imovel.Descricao;
+                            existing.Preco = imovel.Preco;
+                            existing.Condominio = imovel.Condominio;
+                            existing.Iptu = imovel.Iptu;
+                            existing.AreaM2 = imovel.AreaM2;
+                            existing.Quartos = imovel.Quartos;
+                            existing.Banheiros = imovel.Banheiros;
+                            existing.Suites = imovel.Suites;
+                            existing.Vagas = imovel.Vagas;
+                            existing.ImagemPrincipalUrl = imovel.ImagemPrincipalUrl;
+                            existing.ImagensUrls = imovel.ImagensUrls;
+                            existing.Amenidades = imovel.Amenidades;
+                            existing.CapturadoEm = imovel.CapturadoEm;
+
+                            await _context.SaveChangesAsync(cancellationToken);
+
+                            if (mudouPreco)
+                            {
+                                var historico = new HistoricoPreco
+                                {
+                                    ImovelId = existing.Id,
+                                    Preco = imovel.Preco,
+                                    CapturadoEm = imovel.CapturadoEm
+                                };
+                                await _context.HistoricoPrecos.AddAsync(historico, cancellationToken);
+                                await _context.SaveChangesAsync(cancellationToken);
+                            }
+
+                            cycleSkipped++;
+                            result.TotalDuplicadosVerificados++;
+                            continue;
+                        }
+
+                        // Fresh new real property
+                        await _imovelRepository.AddAsync(imovel, cancellationToken);
+
+                        // Baseline initial price history entry
+                        var initialHistory = new HistoricoPreco
+                        {
+                            ImovelId = imovel.Id,
+                            Preco = imovel.Preco,
+                            CapturadoEm = imovel.CapturadoEm
+                        };
+                        await _context.HistoricoPrecos.AddAsync(initialHistory, cancellationToken);
+                        await _context.SaveChangesAsync(cancellationToken);
+
+                        existingIds.Add(imovel.ExternalId);
+                        cycleIngested++;
+                        result.TotalNovosIngeridos++;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Erro ao persistir imóvel real {ExternalId}.", imovel.ExternalId);
+                        _context.ChangeTracker.Clear();
+                        result.TotalErros++;
+                    }
+                }
+
+                cycleSummary.NovosIngeridos = cycleIngested;
+                cycleSummary.Duplicados = cycleSkipped;
+                cycleSummary.Sucesso = fetchSuccess;
+                result.Ciclos.Add(cycleSummary);
+                result.CiclosExecutados++;
+
+                // 5. Save sweep log in database
+                var logSweep = new HistoricoVarredura
+                {
+                    Cidade = plan.City,
+                    Estado = plan.State,
+                    BairroTermo = plan.BairroOrKeyword,
+                    TipoNegocio = plan.TipoNegocio,
+                    PaginaConsultada = plan.PageToFetch,
+                    TotalEncontrados = items.Count,
+                    NovosIngeridos = cycleIngested,
+                    DuplicadosIgnorados = cycleSkipped,
+                    ApiKeyUtilizadaReduzida = cycleSummary.ApiKeyUtilizada,
+                    DataConsulta = DateTimeOffset.UtcNow
+                };
+                await _context.HistoricoVarreduras.AddAsync(logSweep, cancellationToken);
+                await _context.SaveChangesAsync(cancellationToken);
+
+                if (result.QuotaEsgotada) break;
+            }
+
+            // 6. Recalculate and persist statistical aggregates in analise_regiao
+            await RecalcularTodasAnalisesRegionaisAsync(cancellationToken);
+
+            // 7. Attach updated coverage status
+            result.CoberturaAtual = await _searchMatrixEngine.GetDatabaseCoverageAsync(cancellationToken);
+            result.ApiKeysStats = _apiKeyPoolManager.GetPoolStats();
+            result.Message = $"Varredura concluída: {result.TotalNovosIngeridos} novos imóveis 100% reais ingeridos em {result.CiclosExecutados} ciclos.";
+
+            return result;
+        }
+        finally
+        {
+            lock (IngestGate)
+            {
+                _ingestInProgress = false;
+            }
         }
     }
 
+    /// <summary>
+    /// Executa um único ciclo/passo de seed inteligente, ideal para feedback visual em tempo real na UI.
+    /// </summary>
+    public async Task<SmartSeedStepResult> RunSingleSmartSeedStepAsync(
+        string? preferredType = null,
+        CancellationToken cancellationToken = default)
+    {
+        lock (IngestGate)
+        {
+            if (_ingestInProgress)
+            {
+                throw new InvalidOperationException("ingest in progress");
+            }
+            _ingestInProgress = true;
+        }
+
+        try
+        {
+            TipoNegocio tipoNegocio;
+            if (!string.IsNullOrWhiteSpace(preferredType) && Enum.TryParse<TipoNegocio>(preferredType, true, out var parsed))
+            {
+                tipoNegocio = parsed;
+            }
+            else
+            {
+                var cov = await _searchMatrixEngine.GetDatabaseCoverageAsync(cancellationToken);
+                var totalSale = cov.Sum(x => x.TotalVenda);
+                var totalRent = cov.Sum(x => x.TotalAluguel);
+                tipoNegocio = totalSale <= totalRent ? TipoNegocio.Sale : TipoNegocio.Rent;
+            }
+
+            var plan = await _searchMatrixEngine.PlanNextSearchTargetAsync(tipoNegocio, null, cancellationToken);
+            var cycleSummary = new SearchCycleSummary
+            {
+                Termo = plan.BairroOrKeyword,
+                TipoNegocio = plan.TipoNegocio,
+                Pagina = plan.PageToFetch,
+                Motivo = plan.Reason
+            };
+
+            var activeKey = _apiKeyPoolManager.GetActiveKey();
+            if (string.IsNullOrWhiteSpace(activeKey))
+            {
+                cycleSummary.Sucesso = false;
+                cycleSummary.ApiKeyUtilizada = "Nenhuma chave disponível";
+                return new SmartSeedStepResult
+                {
+                    Ciclo = cycleSummary,
+                    QuotaEsgotada = true,
+                    Message = "Todas as chaves do pool de API estão esgotadas ou nenhuma foi configurada.",
+                    CoberturaAtual = await _searchMatrixEngine.GetDatabaseCoverageAsync(cancellationToken),
+                    ApiKeysStats = _apiKeyPoolManager.GetPoolStats()
+                };
+            }
+
+            cycleSummary.ApiKeyUtilizada = _apiKeyPoolManager.GetActiveKeyMasked();
+
+            List<GeckoPropertyDetailed> items = new();
+            bool fetchSuccess = false;
+
+            while (!fetchSuccess)
+            {
+                try
+                {
+                    items = await FetchPropertiesFromPlpWithKeyAsync(
+                        plan.City,
+                        plan.State,
+                        plan.TipoNegocio,
+                        plan.PageToFetch,
+                        plan.BairroOrKeyword,
+                        activeKey,
+                        cancellationToken);
+
+                    _apiKeyPoolManager.ReportSuccess(activeKey, 1);
+                    fetchSuccess = true;
+                }
+                catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.TooManyRequests)
+                {
+                    var rotated = _apiKeyPoolManager.ReportExhaustedOrRateLimited(activeKey);
+                    if (!rotated) break;
+                    activeKey = _apiKeyPoolManager.GetActiveKey();
+                    if (activeKey == null) break;
+                    cycleSummary.ApiKeyUtilizada = _apiKeyPoolManager.GetActiveKeyMasked();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Erro ao extrair listagem da GeckoAPI para termo '{Termo}'.", plan.BairroOrKeyword);
+                    break;
+                }
+            }
+
+            cycleSummary.Encontrados = items.Count;
+            int cycleIngested = 0;
+            int cycleSkipped = 0;
+
+            foreach (var item in items)
+            {
+                if (!TryMapProperty(item, plan.City, plan.State, plan.TipoNegocio, plan.BairroOrKeyword, out var imovel, out var bairroName))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    var persistedBairro = await _bairroRepository.GetOrCreateAsync(bairroName, plan.City, plan.State, cancellationToken);
+                    imovel.BairroId = persistedBairro.Id;
+                    imovel.Bairro = null;
+
+                    var existing = await _imovelRepository.GetByExternalIdAsync(imovel.Fonte, imovel.ExternalId, cancellationToken);
+                    if (existing is not null)
+                    {
+                        var mudouPreco = existing.Preco != imovel.Preco;
+                        existing.Titulo = imovel.Titulo;
+                        existing.Descricao = imovel.Descricao;
+                        existing.Preco = imovel.Preco;
+                        existing.Condominio = imovel.Condominio;
+                        existing.Iptu = imovel.Iptu;
+                        existing.AreaM2 = imovel.AreaM2;
+                        existing.Quartos = imovel.Quartos;
+                        existing.Banheiros = imovel.Banheiros;
+                        existing.Suites = imovel.Suites;
+                        existing.Vagas = imovel.Vagas;
+                        existing.ImagemPrincipalUrl = imovel.ImagemPrincipalUrl;
+                        existing.ImagensUrls = imovel.ImagensUrls;
+                        existing.Amenidades = imovel.Amenidades;
+                        existing.CapturadoEm = imovel.CapturadoEm;
+
+                        await _context.SaveChangesAsync(cancellationToken);
+
+                        if (mudouPreco)
+                        {
+                            var historico = new HistoricoPreco
+                            {
+                                ImovelId = existing.Id,
+                                Preco = imovel.Preco,
+                                CapturadoEm = imovel.CapturadoEm
+                            };
+                            await _context.HistoricoPrecos.AddAsync(historico, cancellationToken);
+                            await _context.SaveChangesAsync(cancellationToken);
+                        }
+
+                        cycleSkipped++;
+                        continue;
+                    }
+
+                    // Fresh new real property
+                    await _imovelRepository.AddAsync(imovel, cancellationToken);
+
+                    var initialHistory = new HistoricoPreco
+                    {
+                        ImovelId = imovel.Id,
+                        Preco = imovel.Preco,
+                        CapturadoEm = imovel.CapturadoEm
+                    };
+                    await _context.HistoricoPrecos.AddAsync(initialHistory, cancellationToken);
+                    await _context.SaveChangesAsync(cancellationToken);
+
+                    cycleIngested++;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Erro ao persistir imóvel real {ExternalId}.", imovel.ExternalId);
+                    _context.ChangeTracker.Clear();
+                }
+            }
+
+            cycleSummary.NovosIngeridos = cycleIngested;
+            cycleSummary.Duplicados = cycleSkipped;
+            cycleSummary.Sucesso = fetchSuccess;
+
+            var logSweep = new HistoricoVarredura
+            {
+                Cidade = plan.City,
+                Estado = plan.State,
+                BairroTermo = plan.BairroOrKeyword,
+                TipoNegocio = plan.TipoNegocio,
+                PaginaConsultada = plan.PageToFetch,
+                TotalEncontrados = items.Count,
+                NovosIngeridos = cycleIngested,
+                DuplicadosIgnorados = cycleSkipped,
+                ApiKeyUtilizadaReduzida = cycleSummary.ApiKeyUtilizada,
+                DataConsulta = DateTimeOffset.UtcNow
+            };
+            await _context.HistoricoVarreduras.AddAsync(logSweep, cancellationToken);
+            await _context.SaveChangesAsync(cancellationToken);
+
+            // Recalculate stats
+            await RecalcularTodasAnalisesRegionaisAsync(cancellationToken);
+
+            return new SmartSeedStepResult
+            {
+                Ciclo = cycleSummary,
+                TotalNovos = cycleIngested,
+                TotalDuplicados = cycleSkipped,
+                CoberturaAtual = await _searchMatrixEngine.GetDatabaseCoverageAsync(cancellationToken),
+                ApiKeysStats = _apiKeyPoolManager.GetPoolStats(),
+                Message = $"Ciclo executado: {cycleIngested} novos imóveis inseridos para {plan.BairroOrKeyword} ({plan.TipoNegocio})."
+            };
+        }
+        finally
+        {
+            lock (IngestGate)
+            {
+                _ingestInProgress = false;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Ingestão manual com parâmetros definidos pelo usuário
+    /// </summary>
     public async Task<IngestRunResult> RunAsync(
         string city,
         string state,
@@ -68,11 +537,7 @@ public class GeckoApiIngestService
     {
         lock (IngestGate)
         {
-            if (_ingestInProgress)
-            {
-                throw new InvalidOperationException("ingest in progress");
-            }
-
+            if (_ingestInProgress) throw new InvalidOperationException("ingest in progress");
             _ingestInProgress = true;
         }
 
@@ -89,34 +554,42 @@ public class GeckoApiIngestService
 
             for (var page = 1; page <= Math.Max(1, pages); page++)
             {
+                var activeKey = _apiKeyPoolManager.GetActiveKey();
+                if (string.IsNullOrWhiteSpace(activeKey))
+                {
+                    quotaExhausted = true;
+                    break;
+                }
+
                 List<GeckoPropertyDetailed> detailedItems;
 
                 try
                 {
-                    detailedItems = await FetchPropertiesFromPlpAsync(targetCity, targetState, tipoNegocio, page, keyword, cancellationToken);
+                    detailedItems = await FetchPropertiesFromPlpWithKeyAsync(targetCity, targetState, tipoNegocio, page, keyword, activeKey, cancellationToken);
                     creditsUsed += 1;
-                    _logger.LogInformation("GeckoAPI: Extraídos {Count} imóveis reais com fotos para página {Page}.", detailedItems.Count, page);
+                    _apiKeyPoolManager.ReportSuccess(activeKey, 1);
+                    _logger.LogInformation("GeckoAPI: Extraídos {Count} imóveis reais para página {Page}.", detailedItems.Count, page);
                 }
                 catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.TooManyRequests)
                 {
-                    quotaExhausted = true;
-                    _logger.LogWarning(ex, "Quota exhausted while searching listings from GeckoAPI.");
-                    break;
+                    _apiKeyPoolManager.ReportExhaustedOrRateLimited(activeKey);
+                    activeKey = _apiKeyPoolManager.GetActiveKey();
+                    if (activeKey == null)
+                    {
+                        quotaExhausted = true;
+                        break;
+                    }
+                    continue;
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning(ex, "GeckoAPI PLP returned error for page {Page}. Generating fallback sample data.", page);
+                    _logger.LogError(ex, "Erro ao buscar listagem da GeckoAPI.");
                     detailedItems = new List<GeckoPropertyDetailed>();
-                }
-
-                if (detailedItems.Count == 0)
-                {
-                    detailedItems = GenerateFallbackSampleProperties(targetCity, targetState, tipoNegocio, page);
                 }
 
                 foreach (var item in detailedItems)
                 {
-                    if (!TryMapProperty(item, targetCity, targetState, tipoNegocio, out var imovel, out var bairroName))
+                    if (!TryMapProperty(item, targetCity, targetState, tipoNegocio, keyword, out var imovel, out var bairroName))
                     {
                         continue;
                     }
@@ -124,7 +597,6 @@ public class GeckoApiIngestService
                     try
                     {
                         var persistedBairro = await _bairroRepository.GetOrCreateAsync(bairroName, targetCity, targetState, cancellationToken);
-
                         imovel.Bairro = null;
                         imovel.BairroId = persistedBairro.Id;
 
@@ -134,8 +606,6 @@ public class GeckoApiIngestService
                             var mudouPreco = existing.Preco != imovel.Preco;
                             existing.Titulo = imovel.Titulo;
                             existing.Descricao = imovel.Descricao;
-                            existing.TipoAnuncio = imovel.TipoAnuncio;
-                            existing.TipoImovel = imovel.TipoImovel;
                             existing.Preco = imovel.Preco;
                             existing.Condominio = imovel.Condominio;
                             existing.Iptu = imovel.Iptu;
@@ -144,16 +614,6 @@ public class GeckoApiIngestService
                             existing.Banheiros = imovel.Banheiros;
                             existing.Suites = imovel.Suites;
                             existing.Vagas = imovel.Vagas;
-                            existing.Rua = imovel.Rua;
-                            existing.Numero = imovel.Numero;
-                            existing.Cep = imovel.Cep;
-                            existing.EnderecoFormatado = imovel.EnderecoFormatado;
-                            existing.Cidade = imovel.Cidade;
-                            existing.Estado = imovel.Estado;
-                            existing.BairroId = persistedBairro.Id;
-                            existing.Latitude = imovel.Latitude;
-                            existing.Longitude = imovel.Longitude;
-                            existing.UrlOriginal = imovel.UrlOriginal;
                             existing.ImagemPrincipalUrl = imovel.ImagemPrincipalUrl;
                             existing.ImagensUrls = imovel.ImagensUrls;
                             existing.Amenidades = imovel.Amenidades;
@@ -169,7 +629,6 @@ public class GeckoApiIngestService
                                     Preco = imovel.Preco,
                                     CapturadoEm = imovel.CapturadoEm
                                 };
-
                                 await _context.HistoricoPrecos.AddAsync(historico, cancellationToken);
                                 await _context.SaveChangesAsync(cancellationToken);
                             }
@@ -179,16 +638,29 @@ public class GeckoApiIngestService
                         }
 
                         await _imovelRepository.AddAsync(imovel, cancellationToken);
+
+                        var initialHist = new HistoricoPreco
+                        {
+                            ImovelId = imovel.Id,
+                            Preco = imovel.Preco,
+                            CapturadoEm = imovel.CapturadoEm
+                        };
+                        await _context.HistoricoPrecos.AddAsync(initialHist, cancellationToken);
+                        await _context.SaveChangesAsync(cancellationToken);
+
                         ingested++;
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogError(ex, "Error persisting item {ExternalId}.", imovel.ExternalId);
+                        _logger.LogError(ex, "Erro ao persistir item {ExternalId}.", imovel.ExternalId);
                         _context.ChangeTracker.Clear();
                         errors++;
                     }
                 }
             }
+
+            // Recalculate analytics
+            await RecalcularTodasAnalisesRegionaisAsync(cancellationToken);
 
             return new IngestRunResult
             {
@@ -209,22 +681,175 @@ public class GeckoApiIngestService
     }
 
     /// <summary>
-    /// PLP call to extract complete list of properties with full details & authentic photos
+    /// Recalcula estatísticas e persiste na tabela analise_regiao
     /// </summary>
-    public async Task<List<GeckoPropertyDetailed>> FetchPropertiesFromPlpAsync(
+    public async Task RecalcularTodasAnalisesRegionaisAsync(CancellationToken cancellationToken = default)
+    {
+        var bairros = await _context.Bairros.AsNoTracking().ToListAsync(cancellationToken);
+        var types = new[] { TipoNegocio.Sale, TipoNegocio.Rent };
+
+        foreach (var b in bairros)
+        {
+            var imoveis = await _context.Imoveis
+                .AsNoTracking()
+                .Where(x => x.BairroId == b.Id)
+                .ToListAsync(cancellationToken);
+
+            foreach (var tipo in types)
+            {
+                var filtrados = imoveis.Where(i => i.TipoNegocio == tipo).ToList();
+                if (!filtrados.Any()) continue;
+
+                var calculo = AnaliseImoveisService.CalcularAnalise(filtrados, tipo);
+
+                var existing = await _context.AnalisesRegiao
+                    .FirstOrDefaultAsync(a => a.BairroId == b.Id && a.TipoNegocio == tipo, cancellationToken);
+
+                if (existing != null)
+                {
+                    existing.PrecoMedio = calculo.PrecoMedio;
+                    existing.PrecoMediano = calculo.PrecoMediano;
+                    existing.PrecoM2Medio = calculo.PrecoM2Medio;
+                    existing.DesvioPadraoAmostral = calculo.DesvioPadraoAmostral;
+                    existing.AmostraCount = calculo.AmostraCount;
+                    existing.AtualizadoEm = DateTimeOffset.UtcNow;
+                }
+                else
+                {
+                    await _context.AnalisesRegiao.AddAsync(new AnaliseRegiao
+                    {
+                        BairroId = b.Id,
+                        TipoNegocio = tipo,
+                        PrecoMedio = calculo.PrecoMedio,
+                        PrecoMediano = calculo.PrecoMediano,
+                        PrecoM2Medio = calculo.PrecoM2Medio,
+                        DesvioPadraoAmostral = calculo.DesvioPadraoAmostral,
+                        AmostraCount = calculo.AmostraCount,
+                        AtualizadoEm = DateTimeOffset.UtcNow
+                    }, cancellationToken);
+                }
+            }
+        }
+
+        await _context.SaveChangesAsync(cancellationToken);
+        _logger.LogInformation("GeckoApiIngestService: Tabela analise_regiao recalculada e sincronizada.");
+    }
+
+    /// <summary>
+    /// Exporta os dados 100% reais já ingeridos no banco Neon para um script SQL idempotente.
+    /// </summary>
+    public async Task<string> ExportSqlSnapshotAsync(CancellationToken cancellationToken = default)
+    {
+        var bairros = await _context.Bairros.AsNoTracking().ToListAsync(cancellationToken);
+        var imoveis = await _context.Imoveis.AsNoTracking().ToListAsync(cancellationToken);
+        var historicos = await _context.HistoricoPrecos.AsNoTracking().ToListAsync(cancellationToken);
+        var analises = await _context.AnalisesRegiao.AsNoTracking().ToListAsync(cancellationToken);
+
+        var sb = new StringBuilder();
+        sb.AppendLine("-- =====================================================");
+        sb.AppendLine($"-- SNAPSHOT DE DADOS 100% REAIS INGERIDOS - {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC");
+        sb.AppendLine($"-- Total Bairros: {bairros.Count} | Imóveis: {imoveis.Count} | Históricos: {historicos.Count} | Análises: {analises.Count}");
+        sb.AppendLine("-- =====================================================");
+        sb.AppendLine();
+
+        // Bairros
+        sb.AppendLine("-- 1. Bairros");
+        foreach (var b in bairros)
+        {
+            var nomeSafe = b.Nome.Replace("'", "''");
+            var cidSafe = b.Cidade.Replace("'", "''");
+            var estSafe = b.Estado.Replace("'", "''");
+            sb.AppendLine($"INSERT INTO bairros (id, nome, cidade, estado) VALUES ('{b.Id}', '{nomeSafe}', '{cidSafe}', '{estSafe}') ON CONFLICT (nome, cidade, estado) DO UPDATE SET nome = EXCLUDED.nome;");
+        }
+        sb.AppendLine();
+
+        // Imóveis
+        sb.AppendLine("-- 2. Imóveis Reais");
+        foreach (var i in imoveis)
+        {
+            var extIdSafe = i.ExternalId.Replace("'", "''");
+            var fonteSafe = i.Fonte.Replace("'", "''");
+            var titSafe = (i.Titulo ?? "").Replace("'", "''");
+            var descSafe = i.Descricao != null ? $"'{i.Descricao.Replace("'", "''")}'" : "NULL";
+            var tipoNeg = i.TipoNegocio == TipoNegocio.Sale ? "sale" : "rent";
+            var tipoAnun = i.TipoAnuncio != null ? $"'{i.TipoAnuncio.Replace("'", "''")}'" : "NULL";
+            var tipoImov = i.TipoImovel != null ? $"'{i.TipoImovel.Replace("'", "''")}'" : "NULL";
+            var cond = i.Condominio.HasValue ? i.Condominio.Value.ToString(System.Globalization.CultureInfo.InvariantCulture) : "NULL";
+            var iptu = i.Iptu.HasValue ? i.Iptu.Value.ToString(System.Globalization.CultureInfo.InvariantCulture) : "NULL";
+            var area = i.AreaM2.HasValue ? i.AreaM2.Value.ToString(System.Globalization.CultureInfo.InvariantCulture) : "NULL";
+            var quartos = i.Quartos.HasValue ? i.Quartos.Value.ToString() : "NULL";
+            var banheiros = i.Banheiros.HasValue ? i.Banheiros.Value.ToString() : "NULL";
+            var suites = i.Suites.HasValue ? i.Suites.Value.ToString() : "NULL";
+            var vagas = i.Vagas.HasValue ? i.Vagas.Value.ToString() : "NULL";
+            var rua = i.Rua != null ? $"'{i.Rua.Replace("'", "''")}'" : "NULL";
+            var num = i.Numero != null ? $"'{i.Numero.Replace("'", "''")}'" : "NULL";
+            var cep = i.Cep != null ? $"'{i.Cep.Replace("'", "''")}'" : "NULL";
+            var endFmt = i.EnderecoFormatado != null ? $"'{i.EnderecoFormatado.Replace("'", "''")}'" : "NULL";
+            var lat = i.Latitude.HasValue ? i.Latitude.Value.ToString(System.Globalization.CultureInfo.InvariantCulture) : "NULL";
+            var lng = i.Longitude.HasValue ? i.Longitude.Value.ToString(System.Globalization.CultureInfo.InvariantCulture) : "NULL";
+            var urlOrig = i.UrlOriginal != null ? $"'{i.UrlOriginal.Replace("'", "''")}'" : "NULL";
+            var imgPrinc = i.ImagemPrincipalUrl != null ? $"'{i.ImagemPrincipalUrl.Replace("'", "''")}'" : "NULL";
+
+            // Amenidades array
+            var amenArr = i.Amenidades != null && i.Amenidades.Any()
+                ? "ARRAY[" + string.Join(", ", i.Amenidades.Select(a => $"'{a.Replace("'", "''")}'")) + "]::text[]"
+                : "NULL";
+
+            // Imagens array
+            var imgArr = i.ImagensUrls != null && i.ImagensUrls.Any()
+                ? "ARRAY[" + string.Join(", ", i.ImagensUrls.Select(a => $"'{a.Replace("'", "''")}'")) + "]::text[]"
+                : "NULL";
+
+            sb.AppendLine($"INSERT INTO imoveis (id, external_id, fonte, titulo, descricao, tipo_negocio, tipo_anuncio, tipo_imovel, preco, condominio, iptu, area_m2, quartos, banheiros, suites, vagas, rua, numero, cep, endereco_formatado, cidade, estado, bairro_id, latitude, longitude, url_original, imagem_principal_url, imagens_urls, amenidades, capturado_em) " +
+                          $"VALUES ('{i.Id}', '{extIdSafe}', '{fonteSafe}', '{titSafe}', {descSafe}, '{tipoNeg}'::tipo_negocio, {tipoAnun}, {tipoImov}, {i.Preco.ToString(System.Globalization.CultureInfo.InvariantCulture)}, {cond}, {iptu}, {area}, {quartos}, {banheiros}, {suites}, {vagas}, {rua}, {num}, {cep}, {endFmt}, '{i.Cidade?.Replace("'", "''") ?? "Guarulhos"}', '{i.Estado?.Replace("'", "''") ?? "SP"}', '{i.BairroId}', {lat}, {lng}, {urlOrig}, {imgPrinc}, {imgArr}, {amenArr}, '{i.CapturadoEm:yyyy-MM-dd HH:mm:ss}+00') " +
+                          $"ON CONFLICT (fonte, external_id) DO UPDATE SET preco = EXCLUDED.preco, capturado_em = EXCLUDED.capturado_em;");
+        }
+        sb.AppendLine();
+
+        // Histórico
+        sb.AppendLine("-- 3. Histórico de Preços");
+        foreach (var h in historicos)
+        {
+            sb.AppendLine($"INSERT INTO historico_precos (id, imovel_id, preco, capturado_em) VALUES ('{h.Id}', '{h.ImovelId}', {h.Preco.ToString(System.Globalization.CultureInfo.InvariantCulture)}, '{h.CapturadoEm:yyyy-MM-dd HH:mm:ss}+00') ON CONFLICT (id) DO NOTHING;");
+        }
+        sb.AppendLine();
+
+        // Análise Região
+        sb.AppendLine("-- 4. Análise de Região Consolidada");
+        foreach (var a in analises)
+        {
+            var tipoNeg = a.TipoNegocio == TipoNegocio.Sale ? "sale" : "rent";
+            var pM2 = a.PrecoM2Medio.HasValue ? a.PrecoM2Medio.Value.ToString(System.Globalization.CultureInfo.InvariantCulture) : "NULL";
+            sb.AppendLine($"INSERT INTO analise_regiao (bairro_id, tipo_negocio, preco_medio, preco_mediano, preco_m2_medio, desvio_padrao_amostral, amostra_count, atualizado_em) " +
+                          $"VALUES ('{a.BairroId}', '{tipoNeg}'::tipo_negocio, {a.PrecoMedio.ToString(System.Globalization.CultureInfo.InvariantCulture)}, {a.PrecoMediano.ToString(System.Globalization.CultureInfo.InvariantCulture)}, {pM2}, {a.DesvioPadraoAmostral.ToString(System.Globalization.CultureInfo.InvariantCulture)}, {a.AmostraCount}, '{a.AtualizadoEm:yyyy-MM-dd HH:mm:ss}+00') " +
+                          $"ON CONFLICT (bairro_id, tipo_negocio) DO UPDATE SET preco_medio = EXCLUDED.preco_medio, preco_mediano = EXCLUDED.preco_mediano, preco_m2_medio = EXCLUDED.preco_m2_medio, desvio_padrao_amostral = EXCLUDED.desvio_padrao_amostral, amostra_count = EXCLUDED.amostra_count, atualizado_em = EXCLUDED.atualizado_em;");
+        }
+
+        return sb.ToString();
+    }
+
+    public async Task<List<GeckoPropertyDetailed>> FetchPropertiesFromPlpWithKeyAsync(
         string city,
         string state,
         TipoNegocio tipoNegocio,
         int page,
         string? keyword,
+        string apiKey,
         CancellationToken cancellationToken)
     {
+        var directUrl = SmartSearchMatrixEngine.BuildZapImoveisPlpUrl(city, state, keyword, tipoNegocio, page);
+
         var payload = new Dictionary<string, object?>
         {
             ["target"] = "zapimoveis.com.br",
             ["type"] = "plp",
+            ["url"] = directUrl,
             ["city"] = city,
             ["state"] = state,
+            ["neighborhood"] = keyword,
+            ["location"] = !string.IsNullOrWhiteSpace(keyword) && !keyword.Equals(city, StringComparison.OrdinalIgnoreCase)
+                ? $"{state.ToLowerInvariant()}+{SmartSearchMatrixEngine.Slugify(city)}+{SmartSearchMatrixEngine.Slugify(keyword)}"
+                : $"{state.ToLowerInvariant()}+{SmartSearchMatrixEngine.Slugify(city)}",
             ["businessType"] = tipoNegocio == TipoNegocio.Sale ? "sale" : "rent",
             ["page"] = page
         };
@@ -236,6 +861,11 @@ public class GeckoApiIngestService
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/extract");
         request.Headers.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
+        request.Headers.Remove("Authorization");
+        request.Headers.Add("Authorization", $"Bearer {apiKey}");
+        request.Headers.Remove("x-api-key");
+        request.Headers.Add("x-api-key", apiKey);
+
         request.Content = System.Net.Http.Json.JsonContent.Create(payload);
 
         using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
@@ -252,38 +882,6 @@ public class GeckoApiIngestService
 
         var json = await response.Content.ReadAsStringAsync(cancellationToken);
         return ParsePlpJsonToProperties(json, city, state, tipoNegocio);
-    }
-
-    /// <summary>
-    /// Step 2: PDP call to extract complete property details with real photos & exact address
-    /// </summary>
-    public async Task<GeckoPropertyDetailed?> FetchPropertyDetailAsync(string url, CancellationToken cancellationToken)
-    {
-        var payload = new Dictionary<string, object?>
-        {
-            ["url"] = url,
-            ["target"] = "zapimoveis.com.br",
-            ["type"] = "pdp"
-        };
-
-        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/extract");
-        request.Headers.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
-        request.Content = System.Net.Http.Json.JsonContent.Create(payload);
-
-        using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-
-        if (response.StatusCode == HttpStatusCode.TooManyRequests)
-        {
-            throw new HttpRequestException("rate limit exceeded", null, HttpStatusCode.TooManyRequests);
-        }
-
-        if (!response.IsSuccessStatusCode)
-        {
-            return null;
-        }
-
-        var json = await response.Content.ReadAsStringAsync(cancellationToken);
-        return ParsePdpJson(json, url);
     }
 
     public static List<GeckoPropertyDetailed> ParsePlpJsonToProperties(string json, string defaultCity, string defaultState, TipoNegocio tipoNegocio)
@@ -446,7 +1044,7 @@ public class GeckoApiIngestService
                         UrlOriginal = url,
                         TipoAnuncio = "Padrao",
                         TipoNegocio = tipoNegocio == TipoNegocio.Sale ? "Sale" : "Rent",
-                        TipoImovel = "Apartamento",
+                        TipoImovel = GuessPropertyType(title, description),
                         ImagemPrincipalUrl = images.FirstOrDefault(),
                         ImagensUrls = images,
                         Amenidades = amenities
@@ -460,191 +1058,6 @@ public class GeckoApiIngestService
         }
 
         return result;
-    }
-
-    private static List<string> ExtractUrlsFromPlpJson(string json)
-    {
-        var result = new List<string>();
-        if (string.IsNullOrWhiteSpace(json)) return result;
-
-        try
-        {
-            using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
-
-            void SearchUrls(JsonElement element)
-            {
-                if (element.ValueKind == JsonValueKind.Array)
-                {
-                    foreach (var item in element.EnumerateArray())
-                    {
-                        SearchUrls(item);
-                    }
-                }
-                else if (element.ValueKind == JsonValueKind.Object)
-                {
-                    if (element.TryGetProperty("url", out var urlProp) && urlProp.ValueKind == JsonValueKind.String)
-                    {
-                        var urlStr = urlProp.GetString();
-                        if (!string.IsNullOrWhiteSpace(urlStr) && urlStr.Contains("zapimoveis.com.br/imovel"))
-                        {
-                            result.Add(urlStr);
-                        }
-                    }
-
-                    foreach (var prop in element.EnumerateObject())
-                    {
-                        if (prop.Value.ValueKind is JsonValueKind.Object or JsonValueKind.Array)
-                        {
-                            SearchUrls(prop.Value);
-                        }
-                    }
-                }
-            }
-
-            SearchUrls(root);
-        }
-        catch
-        {
-            // ignore json parse errors
-        }
-
-        return result.Distinct().ToList();
-    }
-
-    private static GeckoPropertyDetailed? ParsePdpJson(string json, string requestUrl)
-    {
-        if (string.IsNullOrWhiteSpace(json)) return null;
-
-        try
-        {
-            using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
-
-            // Navigate to data.data
-            JsonElement data = root;
-            if (root.TryGetProperty("data", out var d1))
-            {
-                data = d1;
-                if (d1.TryGetProperty("data", out var d2))
-                {
-                    data = d2;
-                }
-            }
-
-            var listingId = GetString(data, "listingId", "listingExternalId", "id") ?? Guid.NewGuid().ToString("N");
-            var title = GetString(data, "title", "metaTitle") ?? "Imóvel ZapImóveis";
-            var description = GetString(data, "description");
-            var businessType = GetString(data, "businessType") ?? "SALE";
-            var listingType = GetString(data, "listingType") ?? "USED";
-
-            // Price & Taxes
-            decimal? price = null;
-            decimal? condo = null;
-            decimal? iptu = null;
-
-            if (data.TryGetProperty("prices", out var pricesObj))
-            {
-                price = GetDecimal(pricesObj, "price", "mainValue");
-                condo = GetDecimal(pricesObj, "monthlyCondoFee", "condoFee");
-                iptu = GetDecimal(pricesObj, "iptu", "taxValue");
-            }
-            price ??= GetDecimal(data, "price", "preco");
-
-            // Address
-            string? street = null;
-            string? zipCode = null;
-            string? formattedAddress = GetString(data, "formattedAddress");
-            string? neighborhood = null;
-            string? city = null;
-            string? state = null;
-            double? lat = null;
-            double? lng = null;
-
-            if (data.TryGetProperty("address", out var addrObj))
-            {
-                street = GetString(addrObj, "street", "logradouro");
-                zipCode = GetString(addrObj, "zipCode", "cep");
-                neighborhood = GetString(addrObj, "neighborhood", "bairro");
-                city = GetString(addrObj, "city", "cidade");
-                state = GetString(addrObj, "stateAcronym", "state", "estado");
-                lat = GetDouble(addrObj, "latitude", "lat");
-                lng = GetDouble(addrObj, "longitude", "lng", "lon");
-            }
-
-            // Specs
-            var area = GetFirstDecimalFromArray(data, "usableAreas", "areas") ?? GetDecimal(data, "usableArea", "areaM2");
-            var bedrooms = GetFirstIntFromArray(data, "bedrooms") ?? GetInt(data, "bedrooms");
-            var bathrooms = GetFirstIntFromArray(data, "bathrooms") ?? GetInt(data, "bathrooms");
-            var suites = GetFirstIntFromArray(data, "suites") ?? GetInt(data, "suites");
-            var parking = GetFirstIntFromArray(data, "parkingSpaces", "vagas") ?? GetInt(data, "parkingSpaces", "vagas");
-
-            // Images with {action}/{width}x{height} formatting
-            var imageUrls = new List<string>();
-            if (data.TryGetProperty("images", out var imagesArr) && imagesArr.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var img in imagesArr.EnumerateArray())
-                {
-                    var imgUrl = GetString(img, "url", "imageUrl");
-                    if (!string.IsNullOrWhiteSpace(imgUrl))
-                    {
-                        // Replace placeholder template
-                        var formatted = imgUrl.Replace("{action}", "fit-in")
-                                              .Replace("{width}x{height}", "800x600");
-                        imageUrls.Add(formatted);
-                    }
-                }
-            }
-
-            // Amenities
-            var amenities = new List<string>();
-            if (data.TryGetProperty("amenities", out var amenArr) && amenArr.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var a in amenArr.EnumerateArray())
-                {
-                    if (a.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(a.GetString()))
-                    {
-                        amenities.Add(a.GetString()!);
-                    }
-                }
-            }
-
-            if (price == null || price <= 0) return null;
-
-            return new GeckoPropertyDetailed
-            {
-                Id = listingId,
-                Titulo = title,
-                Descricao = description,
-                Preco = price.Value,
-                Condominio = condo,
-                Iptu = iptu,
-                AreaM2 = area,
-                Quartos = bedrooms,
-                Banheiros = bathrooms,
-                Suites = suites,
-                Vagas = parking,
-                Rua = street,
-                Cep = zipCode,
-                EnderecoFormatado = formattedAddress,
-                Bairro = neighborhood ?? "Centro",
-                Cidade = city ?? "Guarulhos",
-                Estado = state ?? "SP",
-                Latitude = lat,
-                Longitude = lng,
-                UrlOriginal = requestUrl,
-                TipoAnuncio = listingType,
-                TipoNegocio = businessType.Contains("RENT", StringComparison.OrdinalIgnoreCase) ? "Rent" : "Sale",
-                TipoImovel = GuessPropertyType(title, description),
-                ImagemPrincipalUrl = imageUrls.FirstOrDefault(),
-                ImagensUrls = imageUrls,
-                Amenidades = amenities
-            };
-        }
-        catch
-        {
-            return null;
-        }
     }
 
     private static string GuessPropertyType(string title, string? desc)
@@ -663,10 +1076,22 @@ public class GeckoApiIngestService
         string targetCity,
         string targetState,
         TipoNegocio tipoNegocio,
+        string? defaultNeighborhood,
         out Imovel imovel,
         out string bairroName)
     {
-        bairroName = string.IsNullOrWhiteSpace(item.Bairro) ? "Centro" : item.Bairro;
+        if (!string.IsNullOrWhiteSpace(item.Bairro) && !item.Bairro.Equals(targetCity, StringComparison.OrdinalIgnoreCase))
+        {
+            bairroName = item.Bairro;
+        }
+        else if (!string.IsNullOrWhiteSpace(defaultNeighborhood))
+        {
+            bairroName = defaultNeighborhood;
+        }
+        else
+        {
+            bairroName = "Centro";
+        }
 
         imovel = new Imovel
         {
@@ -701,232 +1126,6 @@ public class GeckoApiIngestService
         };
 
         return true;
-    }
-
-    private static List<GeckoPropertyDetailed> GenerateFallbackSampleProperties(string city, string state, TipoNegocio tipoNegocio, int page)
-    {
-        var result = new List<GeckoPropertyDetailed>();
-        var isSale = tipoNegocio == TipoNegocio.Sale;
-
-        var neighborhoods = new[]
-        {
-            new {
-                Name = "Jardim Maia",
-                Street = "Av. Paulo Faccini, 1850",
-                Cep = "07115-000",
-                BasePrice = isSale ? 1350000m : 5200m,
-                Lat = -23.4532,
-                Lng = -46.5276,
-                Area = 128m,
-                Images = new List<string> {
-                    "https://resizedimgs.vivareal.com/fit-in/800x600/vr.images.sp/e7d3cb8f500f42f4b95f316643e2b235.webp",
-                    "https://resizedimgs.vivareal.com/fit-in/800x600/vr.images.sp/8b42fc069a4d4ea0b5ebefcf74cf8f2b.webp",
-                    "https://resizedimgs.vivareal.com/fit-in/800x600/vr.images.sp/9a58b2cd6f9e42e78d91a92e105e6b7f.webp",
-                    "https://resizedimgs.zapimoveis.com.br/fit-in/800x600/vr.images.sp/1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d.webp"
-                }
-            },
-            new {
-                Name = "Vila Augusta",
-                Street = "Rua Cônego Valadão, 842",
-                Cep = "07040-000",
-                BasePrice = isSale ? 720000m : 2900m,
-                Lat = -23.4782,
-                Lng = -46.5398,
-                Area = 82m,
-                Images = new List<string> {
-                    "https://resizedimgs.vivareal.com/fit-in/800x600/vr.images.sp/4e17f9b8c0a34493b80b7e28a55c91d4.webp",
-                    "https://resizedimgs.vivareal.com/fit-in/800x600/vr.images.sp/29fdc387f3b841a1820579e00eb4d764.webp",
-                    "https://resizedimgs.zapimoveis.com.br/fit-in/800x600/vr.images.sp/c347b3ee28e64a69894e77dddafa40a7.webp"
-                }
-            },
-            new {
-                Name = "Centro",
-                Street = "Rua Felício Marcondes, 245",
-                Cep = "07010-030",
-                BasePrice = isSale ? 460000m : 1950m,
-                Lat = -23.4635,
-                Lng = -46.5320,
-                Area = 66m,
-                Images = new List<string> {
-                    "https://resizedimgs.vivareal.com/fit-in/800x600/vr.images.sp/d99f2a48721c43148529e846175653b6.webp",
-                    "https://resizedimgs.zapimoveis.com.br/fit-in/800x600/vr.images.sp/5f72cf2697844005b81a1795c65f9038.webp"
-                }
-            },
-            new {
-                Name = "Gopouva",
-                Street = "Av. Emílio Ribas, 980",
-                Cep = "07051-000",
-                BasePrice = isSale ? 570000m : 2350m,
-                Lat = -23.4695,
-                Lng = -46.5442,
-                Area = 74m,
-                Images = new List<string> {
-                    "https://resizedimgs.vivareal.com/fit-in/800x600/vr.images.sp/0e1b123456789abcdef0123456789abc.webp",
-                    "https://resizedimgs.zapimoveis.com.br/fit-in/800x600/vr.images.sp/a1b2c3d4e5f60718293a4b5c6d7e8f90.webp"
-                }
-            },
-            new {
-                Name = "Vila Galvão",
-                Street = "Rua Francisco Gonzaga Vasconcellos, 110",
-                Cep = "07071-040",
-                BasePrice = isSale ? 850000m : 3400m,
-                Lat = -23.4550,
-                Lng = -46.5670,
-                Area = 112m,
-                Images = new List<string> {
-                    "https://resizedimgs.vivareal.com/fit-in/800x600/vr.images.sp/7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e.webp",
-                    "https://resizedimgs.zapimoveis.com.br/fit-in/800x600/vr.images.sp/3f4e5d6c7b8a90123456789abcdef012.webp"
-                }
-            },
-            new {
-                Name = "Flor da Montanha",
-                Street = "Av. Bartolomeu de Carlos, 901",
-                Cep = "07097-420",
-                BasePrice = isSale ? 1150000m : 4600m,
-                Lat = -23.4468,
-                Lng = -46.5352,
-                Area = 108m,
-                Images = new List<string> {
-                    "https://resizedimgs.vivareal.com/fit-in/800x600/vr.images.sp/b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7.webp",
-                    "https://resizedimgs.zapimoveis.com.br/fit-in/800x600/vr.images.sp/9876543210fedcba9876543210fedcba.webp"
-                }
-            },
-            new {
-                Name = "Macedo",
-                Street = "Av. Monteiro Lobato, 1620",
-                Cep = "07112-000",
-                BasePrice = isSale ? 610000m : 2500m,
-                Lat = -23.4502,
-                Lng = -46.5165,
-                Area = 76m,
-                Images = new List<string> {
-                    "https://resizedimgs.vivareal.com/fit-in/800x600/vr.images.sp/6e5d4c3b2a109876543210fedcba9876.webp"
-                }
-            },
-            new {
-                Name = "Cecap",
-                Street = "Av. Monteiro Lobato, 3400",
-                Cep = "07190-000",
-                BasePrice = isSale ? 380000m : 1650m,
-                Lat = -23.4372,
-                Lng = -46.4935,
-                Area = 64m,
-                Images = new List<string> {
-                    "https://resizedimgs.zapimoveis.com.br/fit-in/800x600/vr.images.sp/1234567890abcdef1234567890abcdef.webp"
-                }
-            }
-        };
-
-        var types = new[] { "Apartamento", "Cobertura", "Studio", "Garden", "Casa" };
-
-        for (int i = 0; i < neighborhoods.Length; i++)
-        {
-            var neigh = neighborhoods[i];
-            var type = types[i % types.Length];
-            var rooms = type == "Studio" ? 1 : (type == "Cobertura" ? 4 : (2 + (i % 2)));
-
-            result.Add(new GeckoPropertyDetailed
-            {
-                Id = $"zap-{(isSale ? "sale" : "rent")}-{neigh.Name.ToLowerInvariant().Replace(" ", "-")}-p{page}-{i + 1}",
-                Titulo = $"{type} c/ {rooms} quartos em {neigh.Name} - {city}",
-                Descricao = $"Excelente oportunidade no bairro {neigh.Name}. Próximo a vias de acesso rápido, shoppings e comércios. Imóvel com planta inteligente e acabamentos de primeira linha.",
-                Preco = neigh.BasePrice,
-                Condominio = Math.Round(neigh.Area * 7.2m, 2),
-                Iptu = Math.Round(neigh.Area * 2.1m, 2),
-                AreaM2 = neigh.Area,
-                Quartos = rooms,
-                Suites = rooms >= 3 ? 1 : 0,
-                Banheiros = Math.Max(1, rooms - 1),
-                Vagas = type == "Studio" ? 1 : 2,
-                Rua = neigh.Street,
-                Numero = "100",
-                Cep = neigh.Cep,
-                EnderecoFormatado = $"{neigh.Street} - {neigh.Name}, {city} - {state}, CEP {neigh.Cep}",
-                Bairro = neigh.Name,
-                Cidade = city,
-                Estado = state,
-                Latitude = neigh.Lat,
-                Longitude = neigh.Lng,
-                UrlOriginal = $"https://www.zapimoveis.com.br/imovel/{neigh.Name.ToLowerInvariant()}-{i + 1}",
-                TipoAnuncio = "USED",
-                TipoNegocio = isSale ? "Sale" : "Rent",
-                TipoImovel = type,
-                ImagemPrincipalUrl = neigh.Images.FirstOrDefault(),
-                ImagensUrls = neigh.Images,
-                Amenidades = new List<string> { "Elevador", "Varanda Gourmet", "Piscina", "Academia", "Portaria 24h", "Churrasqueira" }
-            });
-        }
-
-        return result;
-    }
-
-    private static string? GetString(JsonElement element, params string[] propertyNames)
-    {
-        foreach (var propertyName in propertyNames)
-        {
-            if (element.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String)
-            {
-                return value.GetString();
-            }
-        }
-        return null;
-    }
-
-    private static decimal? GetDecimal(JsonElement element, params string[] propertyNames)
-    {
-        foreach (var propertyName in propertyNames)
-        {
-            if (element.TryGetProperty(propertyName, out var value))
-            {
-                if (value.ValueKind == JsonValueKind.Number && value.TryGetDecimal(out var number))
-                {
-                    return number;
-                }
-                if (value.ValueKind == JsonValueKind.String && decimal.TryParse(value.GetString(), out var parsed))
-                {
-                    return parsed;
-                }
-            }
-        }
-        return null;
-    }
-
-    private static double? GetDouble(JsonElement element, params string[] propertyNames)
-    {
-        foreach (var propertyName in propertyNames)
-        {
-            if (element.TryGetProperty(propertyName, out var value))
-            {
-                if (value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out var number))
-                {
-                    return number;
-                }
-                if (value.ValueKind == JsonValueKind.String && double.TryParse(value.GetString(), out var parsed))
-                {
-                    return parsed;
-                }
-            }
-        }
-        return null;
-    }
-
-    private static int? GetInt(JsonElement element, params string[] propertyNames)
-    {
-        foreach (var propertyName in propertyNames)
-        {
-            if (element.TryGetProperty(propertyName, out var value))
-            {
-                if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var number))
-                {
-                    return number;
-                }
-                if (value.ValueKind == JsonValueKind.String && int.TryParse(value.GetString(), out var parsed))
-                {
-                    return parsed;
-                }
-            }
-        }
-        return null;
     }
 
     private static decimal? GetFirstDecimalFromArray(JsonElement element, params string[] propertyNames)
