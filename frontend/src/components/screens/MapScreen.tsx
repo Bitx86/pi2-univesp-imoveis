@@ -36,6 +36,7 @@ interface MapScreenProps {
   onSelectNeighborhood?: (bairro: NeighborhoodData) => void;
   onNavigateToSimulator?: (bairroId: string, areaM2?: number) => void;
   onNavigateToStats?: (bairroId: string) => void;
+  focusTarget?: { lat: number; lng: number; label: string } | null;
 }
 
 export function MapScreen({
@@ -45,6 +46,7 @@ export function MapScreen({
   onSelectNeighborhood,
   onNavigateToSimulator,
   onNavigateToStats,
+  focusTarget,
 }: MapScreenProps) {
   const effectiveNeighborhoods = useMemo(() => {
     return neighborhoods && neighborhoods.length > 0 ? neighborhoods : NEIGHBORHOODS;
@@ -118,6 +120,7 @@ export function MapScreen({
         L.control.zoom({ position: "bottomright" }).addTo(map);
 
         mapInstanceRef.current = map;
+        if (focusTarget) map.setView([focusTarget.lat, focusTarget.lng], 16);
         markersGroupRef.current = L.layerGroup().addTo(map);
         polygonsGroupRef.current = L.layerGroup().addTo(map);
       }
@@ -270,7 +273,14 @@ export function MapScreen({
     tileProvider,
     businessType,
     onSelectNeighborhood,
+    focusTarget,
   ]);
+
+  useEffect(() => {
+    if (focusTarget && mapInstanceRef.current) {
+      mapInstanceRef.current.flyTo([focusTarget.lat, focusTarget.lng], 16, { duration: 0.8 });
+    }
+  }, [focusTarget]);
 
   // Geocoding Search handler
   const handleGeocodeSearch = async (e: React.FormEvent) => {

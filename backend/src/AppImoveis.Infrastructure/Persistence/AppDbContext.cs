@@ -15,6 +15,7 @@ public class AppDbContext : DbContext
     public DbSet<HistoricoPreco> HistoricoPrecos => Set<HistoricoPreco>();
     public DbSet<AnaliseRegiao> AnalisesRegiao => Set<AnaliseRegiao>();
     public DbSet<HistoricoVarredura> HistoricoVarreduras => Set<HistoricoVarredura>();
+    public DbSet<OcorrenciaCriminal> OcorrenciasCriminais => Set<OcorrenciaCriminal>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -47,7 +48,25 @@ public class AppDbContext : DbContext
             entity.Property(x => x.Nome).HasColumnName("nome").HasMaxLength(200).IsRequired();
             entity.Property(x => x.Cidade).HasColumnName("cidade").HasMaxLength(120).IsRequired();
             entity.Property(x => x.Estado).HasColumnName("estado").HasMaxLength(80).IsRequired();
+            entity.Property(x => x.PopulacaoEstimada).HasColumnName("populacao_estimada");
             entity.HasIndex(x => new { x.Nome, x.Cidade, x.Estado }).IsUnique();
+        });
+
+        modelBuilder.Entity<OcorrenciaCriminal>(entity =>
+        {
+            entity.ToTable("ocorrencias_criminais");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.BairroId).HasColumnName("bairro_id");
+            entity.Property(x => x.TipoCrime).HasColumnName("tipo_crime").HasConversion<string>();
+            entity.Property(x => x.DataOcorrencia).HasColumnName("data_ocorrencia");
+            entity.Property(x => x.Latitude).HasColumnName("latitude");
+            entity.Property(x => x.Longitude).HasColumnName("longitude");
+            entity.Property(x => x.Fonte).HasColumnName("fonte").HasMaxLength(80).IsRequired();
+            entity.Property(x => x.IdentificadorExterno).HasColumnName("identificador_externo").HasMaxLength(200);
+            entity.HasIndex(x => new { x.BairroId, x.DataOcorrencia, x.TipoCrime });
+            entity.HasIndex(x => new { x.Fonte, x.IdentificadorExterno }).IsUnique();
+            entity.HasOne(x => x.Bairro).WithMany().HasForeignKey(x => x.BairroId).OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<Imovel>(entity =>

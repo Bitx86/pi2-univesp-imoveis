@@ -3,6 +3,7 @@
 -- =====================================================
 
 DROP TABLE IF EXISTS historico_precos CASCADE;
+DROP TABLE IF EXISTS ocorrencias_criminais CASCADE;
 DROP TABLE IF EXISTS analise_regiao CASCADE;
 DROP TABLE IF EXISTS imoveis CASCADE;
 DROP TABLE IF EXISTS bairros CASCADE;
@@ -17,6 +18,7 @@ CREATE TABLE bairros (
     nome TEXT NOT NULL,
     cidade TEXT NOT NULL,
     estado TEXT NOT NULL,
+    populacao_estimada INTEGER NULL CHECK (populacao_estimada > 0),
     CONSTRAINT uq_bairros_nome_cidade_estado UNIQUE (nome, cidade, estado)
 );
 
@@ -99,6 +101,18 @@ CREATE TABLE historico_varreduras (
     data_consulta TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE ocorrencias_criminais (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    bairro_id UUID NOT NULL REFERENCES bairros(id) ON DELETE CASCADE,
+    tipo_crime TEXT NOT NULL,
+    data_ocorrencia DATE NOT NULL,
+    latitude DOUBLE PRECISION NULL,
+    longitude DOUBLE PRECISION NULL,
+    fonte TEXT NOT NULL DEFAULT 'SSP-SP',
+    identificador_externo TEXT NULL,
+    CONSTRAINT uq_ocorrencia_fonte_id UNIQUE (fonte, identificador_externo)
+);
+
 -- Índices de Alta Performance
 CREATE INDEX idx_bairros_nome_cidade_estado ON bairros (nome, cidade, estado);
 CREATE INDEX idx_imoveis_bairro_id ON imoveis (bairro_id);
@@ -110,4 +124,4 @@ CREATE INDEX idx_imoveis_fonte_external_id ON imoveis (fonte, external_id);
 CREATE INDEX idx_historico_precos_imovel_id ON historico_precos (imovel_id);
 CREATE INDEX idx_analise_regiao_bairro_id ON analise_regiao (bairro_id);
 CREATE INDEX idx_historico_varreduras_termo ON historico_varreduras (cidade, bairro_termo, tipo_negocio);
-
+CREATE INDEX idx_ocorrencias_bairro_data_tipo ON ocorrencias_criminais (bairro_id, data_ocorrencia, tipo_crime);

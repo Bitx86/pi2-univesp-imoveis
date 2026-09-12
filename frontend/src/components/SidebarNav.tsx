@@ -12,9 +12,10 @@ import {
   ChevronRight,
   Sun,
   Moon,
+  ShieldAlert,
 } from "lucide-react";
 
-export type ScreenType = "map" | "stats" | "simulator" | "bairros";
+export type ScreenType = "map" | "stats" | "simulator" | "bairros" | "violencia";
 
 interface SidebarNavProps {
   activeScreen: ScreenType;
@@ -65,6 +66,13 @@ export function SidebarNav({
       subtitle: "Matriz Regional Comparativa",
       icon: Layers,
       badge: "Guarulhos",
+    },
+    {
+      id: "violencia" as ScreenType,
+      label: "Mapa da Violência",
+      subtitle: "Indicadores criminais SSP-SP",
+      icon: ShieldAlert,
+      badge: "SSP-SP",
     },
   ];
 

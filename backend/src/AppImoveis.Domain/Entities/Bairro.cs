@@ -6,4 +6,5 @@ public class Bairro
     public string Nome { get; set; } = string.Empty;
     public string Cidade { get; set; } = string.Empty;
     public string Estado { get; set; } = string.Empty;
+    public int? PopulacaoEstimada { get; set; }
 }

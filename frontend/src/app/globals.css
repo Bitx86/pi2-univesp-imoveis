@@ -337,6 +337,13 @@ body {
   animation: screenFadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
+@media (max-width: 760px) {
+  .violence-summary-grid,
+  .violence-content-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+
 @keyframes screenFadeIn {
   from {
     opacity: 0;

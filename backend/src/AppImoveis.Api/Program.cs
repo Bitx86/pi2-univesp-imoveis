@@ -66,6 +66,7 @@ builder.Services.AddScoped<ImovelRepository>();
 builder.Services.AddSingleton<GeckoApiKeyPoolManager>();
 builder.Services.AddScoped<SmartSearchMatrixEngine>();
 builder.Services.AddHttpClient<GeckoApiIngestService>();
+builder.Services.AddHttpClient<SspSpCrimeService>();
 
 builder.Services.AddOpenApi();
 builder.Services.AddEndpointsApiExplorer();
@@ -243,6 +244,163 @@ app.MapGet("/api/analise/bairro/{bairroId:guid}", async (Guid bairroId, [FromQue
         atualizado_em = analise.AtualizadoEm,
         fonte = "amostral_dinamico"
     });
+});
+
+app.MapGet("/api/seguranca/bairros", async (
+    [FromQuery] string? cidade,
+    [FromQuery] DateOnly? inicio,
+    [FromQuery] DateOnly? fim,
+    AppDbContext dbContext,
+    CancellationToken cancellationToken) =>
+{
+    var dataFim = fim ?? DateOnly.FromDateTime(DateTime.UtcNow);
+    var dataInicio = inicio ?? dataFim.AddYears(-1);
+    if (dataInicio > dataFim)
+    {
+        return Results.BadRequest(new { message = "inicio must be before or equal to fim" });
+    }
+
+    var bairrosQuery = dbContext.Bairros.AsNoTracking().AsQueryable();
+    if (!string.IsNullOrWhiteSpace(cidade)) bairrosQuery = bairrosQuery.Where(b => b.Cidade == cidade);
+
+    var bairros = await bairrosQuery.OrderBy(b => b.Nome).ToListAsync(cancellationToken);
+    var bairroIds = bairros.Select(b => b.Id).ToList();
+    var ocorrencias = await dbContext.OcorrenciasCriminais
+        .AsNoTracking()
+        .Where(o => bairroIds.Contains(o.BairroId) && o.DataOcorrencia >= dataInicio && o.DataOcorrencia <= dataFim)
+        .ToListAsync(cancellationToken);
+    var analises = MapaViolenciaService.Calcular(bairros, ocorrencias, dataInicio, dataFim);
+
+    return Results.Ok(new
+    {
+        periodo = new { inicio = dataInicio, fim = dataFim },
+        fonte = "SSP-SP",
+        dados = analises.Select(a => new
+        {
+            bairro_id = a.BairroId,
+            bairro_nome = a.BairroNome,
+            populacao_estimada = a.PopulacaoEstimada,
+            total_ocorrencias = a.TotalOcorrencias,
+            indice_seguranca = a.IndiceSeguranca,
+            nivel = a.Nivel,
+            indicadores = a.Indicadores.Select(i => new
+            {
+                tipo_crime = i.TipoCrime.ToString(),
+                ocorrencias = i.Ocorrencias,
+                taxa_por_mil = i.TaxaPorMil,
+                peso = i.Peso
+            }),
+            atualizado_em = a.AtualizadoEm
+        })
+    });
+});
+
+app.MapGet("/api/seguranca/guarulhos", async (SspSpCrimeService sspService, CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var data = await sspService.GetGuarulhosAsync(cancellationToken);
+        return Results.Ok(new
+        {
+            municipio = "Guarulhos",
+            municipio_id_ssp = 215,
+            ano = data.Ocorrencias.Ano,
+            fonte = "SSP-SP",
+            granularidade = "municipio",
+            observacao = "Os dados oficiais consultados pela SSP-SP não são distribuídos por bairro nesta consulta.",
+            total_ocorrencias_conhecidas = data.Ocorrencias.Homicidio + data.Ocorrencias.Furto + data.Ocorrencias.Roubo + data.Ocorrencias.FurtoERouboVeiculo,
+            indicadores = new[]
+            {
+                new { tipo_crime = "Homicidio", ocorrencias = (int?)data.Ocorrencias.Homicidio, taxa_por_mil = ParseSspDecimal(data.Taxas.Homicidios) },
+                new { tipo_crime = "Roubo", ocorrencias = (int?)data.Ocorrencias.Roubo, taxa_por_mil = ParseSspDecimal(data.Taxas.Roubos) },
+                new { tipo_crime = "Furto", ocorrencias = (int?)data.Ocorrencias.Furto, taxa_por_mil = ParseSspDecimal(data.Taxas.Furtos) },
+                new { tipo_crime = "FurtoVeiculo", ocorrencias = (int?)null, taxa_por_mil = ParseSspDecimal(data.Taxas.FurtosVeiculo) },
+                new { tipo_crime = "RouboVeiculo", ocorrencias = (int?)null, taxa_por_mil = ParseSspDecimal(data.Taxas.RoubosVeiculo) }
+            }
+        });
+    }
+    catch (HttpRequestException ex)
+    {
+        return Results.Problem(statusCode: 502, title: "SSP-SP indisponível", detail: ex.Message);
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Problem(statusCode: 502, title: "Resposta inválida da SSP-SP", detail: ex.Message);
+    }
+});
+
+app.MapGet("/api/seguranca/distritos-proximos", async ([FromQuery] int ano, [FromQuery] bool atualizar, SspSpCrimeService sspService, CancellationToken cancellationToken) =>
+{
+    var currentYear = DateTime.UtcNow.Year;
+    if (ano < 2001 || ano > currentYear)
+        return Results.BadRequest(new { message = $"ano must be between 2001 and {currentYear}" });
+
+    try
+    {
+        var districts = await sspService.GetNearbyDistrictsAsync(ano, atualizar, cancellationToken);
+        var ranked = districts
+            .Select(d => new
+            {
+                id = d.District.IdDistrito,
+                nome = d.District.Sigla,
+                municipio = d.Municipality,
+                municipio_id_ssp = d.District.IdMunicipio,
+                ano = d.Year,
+                homicidios = d.Summary.Homicidios,
+                roubos = d.Summary.Roubos,
+                furtos = d.Summary.Furtos,
+                roubos_veiculo = d.Summary.RoubosVeiculo,
+                furtos_veiculo = d.Summary.FurtosVeiculo,
+                estupros = d.Summary.Estupros,
+                total_ocorrencias = d.Summary.Homicidios + d.Summary.Roubos + d.Summary.Furtos + d.Summary.RoubosVeiculo + d.Summary.FurtosVeiculo + d.Summary.Estupros
+            })
+            .OrderByDescending(d => d.total_ocorrencias)
+            .ToList();
+
+        return Results.Ok(new
+        {
+            fonte = "SSP-SP",
+            ano,
+            granularidade = "distrito policial",
+            observacao = "Inclui todos os distritos policiais de Guarulhos e municípios do entorno selecionados, além de distritos nominais da zona norte/leste de São Paulo. Não inclui delegacias especializadas. A SSP-SP não fornece coordenadas dos distritos nesta consulta.",
+            dados = ranked
+        });
+    }
+    catch (HttpRequestException ex)
+    {
+        return Results.Problem(statusCode: 502, title: "SSP-SP indisponível", detail: ex.Message);
+    }
+});
+
+app.MapPost("/api/seguranca/ocorrencias", async (
+    ImportarOcorrenciaRequest request,
+    BairroRepository bairroRepository,
+    AppDbContext dbContext,
+    CancellationToken cancellationToken) =>
+{
+    if (string.IsNullOrWhiteSpace(request.Bairro) || string.IsNullOrWhiteSpace(request.Cidade) || string.IsNullOrWhiteSpace(request.Estado))
+        return Results.BadRequest(new { message = "bairro, cidade and estado are required" });
+    if (!Enum.TryParse<TipoCrime>(request.TipoCrime, true, out var tipoCrime))
+        return Results.BadRequest(new { message = "tipo_crime is invalid" });
+    if (request.DataOcorrencia > DateOnly.FromDateTime(DateTime.UtcNow))
+        return Results.BadRequest(new { message = "data_ocorrencia cannot be in the future" });
+
+    var bairro = await bairroRepository.GetOrCreateAsync(request.Bairro, request.Cidade, request.Estado, cancellationToken);
+    if (request.PopulacaoEstimada is > 0) bairro.PopulacaoEstimada = request.PopulacaoEstimada;
+    var ocorrencia = new OcorrenciaCriminal
+    {
+        BairroId = bairro.Id,
+        TipoCrime = tipoCrime,
+        DataOcorrencia = request.DataOcorrencia,
+        Latitude = request.Latitude,
+        Longitude = request.Longitude,
+        Fonte = string.IsNullOrWhiteSpace(request.Fonte) ? "SSP-SP" : request.Fonte,
+        IdentificadorExterno = request.IdentificadorExterno
+    };
+
+    dbContext.OcorrenciasCriminais.Add(ocorrencia);
+    await dbContext.SaveChangesAsync(cancellationToken);
+    return Results.Created($"/api/seguranca/ocorrencias/{ocorrencia.Id}", new { id = ocorrencia.Id, bairro_id = bairro.Id });
 });
 
 app.MapPost("/api/analise/estimar", async (EstimarPrecoRequest request, AppDbContext dbContext, CancellationToken cancellationToken) =>
@@ -505,5 +663,21 @@ app.MapGet("/api/images/proxy", async ([FromQuery] string url, IHttpClientFactor
 
 app.Run();
 
+static decimal? ParseSspDecimal(string value)
+{
+    return decimal.TryParse(value.Replace(".", "").Replace(',', '.'), System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out var parsed) ? parsed : null;
+}
+
 public record EstimarPrecoRequest(decimal Preco, decimal AreaM2, Guid BairroId, string TipoNegocio);
 public record IngestRunRequest(string City, string State, string BusinessType, int Pages = 1, string? Keyword = null);
+public record ImportarOcorrenciaRequest(
+    string Bairro,
+    string Cidade,
+    string Estado,
+    string TipoCrime,
+    DateOnly DataOcorrencia,
+    int? PopulacaoEstimada = null,
+    double? Latitude = null,
+    double? Longitude = null,
+    string? Fonte = "SSP-SP",
+    string? IdentificadorExterno = null);

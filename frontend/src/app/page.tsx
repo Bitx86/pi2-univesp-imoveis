@@ -6,6 +6,7 @@ import { MapScreen } from "@/components/screens/MapScreen";
 import { StatsScreen } from "@/components/screens/StatsScreen";
 import { ValuationScreen } from "@/components/screens/ValuationScreen";
 import { NeighborhoodScreen } from "@/components/screens/NeighborhoodScreen";
+import { ViolenceScreen } from "@/components/screens/ViolenceScreen";
 import { DashboardModal } from "@/components/DashboardModal";
 import { TopographicBackground } from "@/components/TopographicBackground";
 import { BusinessType, NeighborhoodData, NEIGHBORHOODS } from "@/data/imoveisData";
@@ -17,6 +18,7 @@ export default function Home() {
   const [theme, setTheme] = useState<"dark" | "light">("dark");
   const [simulatorInitialArea, setSimulatorInitialArea] = useState<number>(85);
   const [dashboardOpen, setDashboardOpen] = useState(false);
+  const [mapFocusTarget, setMapFocusTarget] = useState<{ lat: number; lng: number; label: string } | null>(null);
 
   // Connect frontend state to real Neon Postgres database
   const {
@@ -109,6 +111,7 @@ export default function Home() {
             onSelectNeighborhood={handleSelectNeighborhood}
             onNavigateToSimulator={handleNavigateToSimulator}
             onNavigateToStats={handleNavigateToStats}
+            focusTarget={mapFocusTarget}
           />
         )}
 
@@ -143,6 +146,8 @@ export default function Home() {
             onNavigateToSimulator={handleNavigateToSimulator}
           />
         )}
+
+        {activeScreen === "violencia" && <ViolenceScreen onOpenMap={(target) => { setMapFocusTarget(target); setActiveScreen("map"); }} />}
       </main>
 
       {/* Database Telemetry / Seed Diagnostics Modal */}
