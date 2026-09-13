@@ -89,6 +89,12 @@ using (var scope = app.Services.CreateScope())
 {
     var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     dbContext.Database.EnsureCreated();
+
+    // EnsureCreated() não altera tabelas já existentes. Se o banco Neon foi
+    // criado antes da coluna populacao_estimada existir, ela precisa ser
+    // adicionada de forma idempotente para evitar 42703 em /api/bairros e /api/imoveis.
+    dbContext.Database.ExecuteSqlRaw(
+        "ALTER TABLE bairros ADD COLUMN IF NOT EXISTS populacao_estimada INTEGER CHECK (populacao_estimada > 0)");
 }
 
 app.UseCors("LocalNext");

@@ -124,6 +124,11 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
+# Logs locais de execução (make run-backend / run-frontend)
+.backend.log
+.frontend.log
+*.log
+
 # Cobertura de Testes
 coverage/
 **/coverage/
